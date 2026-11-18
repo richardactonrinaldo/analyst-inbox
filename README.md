@@ -2,7 +2,9 @@
 
 Students in HIFN1009 chat with **Dana Morgan**, a pretend Manager of Decision Support at a fictional Ontario hospital network. Dana sends analysis requests about a 300-row emergency department dataset, checks students' numbers against the data, gives hints instead of answers, and asks follow-up questions.
 
-Weekly focus options: descriptive statistics, PivotTables, charts (students can attach screenshots), and presenting results.
+Dana sends the data as an Excel attachment (the full dataset with her first request, focused extracts later). Students can attach their own Excel workbook, and Dana reviews their formulas and results cell by cell, or a chart screenshot.
+
+Weekly focus options: descriptive statistics, PivotTables, charts, and presenting results.
 
 ## Deploy on Streamlit Community Cloud (free)
 
