@@ -286,6 +286,11 @@ def conversation_store() -> dict:
     return {"by_number": {}, "by_link": {}}
 
 
+def norm_code(raw: str) -> str:
+    """Class codes ignore capitals, spaces and dashes, so HIFN1009W27 = hifn1009-w27."""
+    return re.sub(r"[\s\-_]+", "", raw or "").lower()
+
+
 def clean_number(raw: str) -> str:
     return re.sub(r"\s+", "", raw or "")
 
@@ -356,7 +361,7 @@ if "student" not in st.session_state:
                 restore_conversation(number)
                 link_session(number)
                 st.rerun()
-            elif not st.secrets.get("CLASS_CODE") or code.strip() != str(st.secrets["CLASS_CODE"]).strip():
+            elif not st.secrets.get("CLASS_CODE") or norm_code(code) != norm_code(str(st.secrets["CLASS_CODE"])):
                 st.error("No saved conversation was found for those digits, so this is a new start. "
                          "Enter your first name and the class code your instructor posted on Blackboard.")
             elif not name.strip():
