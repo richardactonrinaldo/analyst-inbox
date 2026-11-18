@@ -9,6 +9,8 @@ import base64
 import io
 import json
 import re
+import secrets
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -269,6 +271,45 @@ def ask_dana() -> tuple[str, list]:
     return fallback, st.session_state.outbox
 
 
+# ---------------------------------------------------------------- keep conversations across reconnects
+# Streamlit forgets a browser's session when it disconnects (a student switches to Excel for a while,
+# a phone locks). Conversations are kept on the server under a short resume code, which is also put
+# in the page address, so reconnecting or reopening the link picks up where the student left off.
+# They're lost only when the app itself restarts (after a long idle sleep or a new deploy).
+SAVED_KEYS = ["student", "topic", "api_messages", "chat", "tokens"]
+KEEP_DAYS = 14
+CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I/L to avoid typos
+
+
+@st.cache_resource
+def conversation_store() -> dict:
+    return {}
+
+
+def save_conversation():
+    code = st.session_state.get("resume_code")
+    if not code:
+        return
+    store = conversation_store()
+    store[code] = {"saved": time.time(), **{k: st.session_state[k] for k in SAVED_KEYS if k in st.session_state}}
+    cutoff = time.time() - KEEP_DAYS * 86400
+    for old in [c for c, v in store.items() if v["saved"] < cutoff]:
+        store.pop(old, None)
+
+
+def restore_conversation(code: str) -> bool:
+    code = (code or "").strip().upper()
+    saved = conversation_store().get(code)
+    if not saved:
+        return False
+    for k in SAVED_KEYS:
+        st.session_state[k] = saved[k]
+    st.session_state.outbox = []
+    st.session_state.resume_code = code
+    st.query_params["s"] = code
+    return True
+
+
 def reset(topic=None):
     st.session_state.api_messages = []
     st.session_state.chat = []  # dicts: who, text, img, files, upload
@@ -276,7 +317,11 @@ def reset(topic=None):
     st.session_state.outbox = []
     if topic:
         st.session_state.topic = topic
+    save_conversation()
 
+
+if "student" not in st.session_state and st.query_params.get("s"):
+    restore_conversation(st.query_params["s"])
 
 # ---------------------------------------------------------------- sign-in gate
 if "student" not in st.session_state:
@@ -286,13 +331,22 @@ if "student" not in st.session_state:
     with st.form("signin"):
         name = st.text_input("Your first name")
         code = st.text_input("Class code", type="password")
+        resume = st.text_input("Resume code (optional)", placeholder="e.g. K7RM4Q",
+                               help="Enter the code from your sidebar to continue an earlier conversation.")
         if st.form_submit_button("Open my inbox", type="primary"):
             if code.strip() != str(st.secrets.get("CLASS_CODE", "")).strip() or not st.secrets.get("CLASS_CODE"):
                 st.error("That class code isn't right. Check the code your instructor posted on Blackboard.")
+            elif resume.strip():
+                if restore_conversation(resume):
+                    st.rerun()
+                st.error("That resume code wasn't found. It may have expired when the app restarted. "
+                         "Leave it blank to start a new conversation.")
             elif not name.strip():
                 st.error("Enter your first name so Dana knows who she's talking to.")
             else:
                 st.session_state.student = name.strip()
+                st.session_state.resume_code = "".join(secrets.choice(CODE_CHARS) for _ in range(6))
+                st.query_params["s"] = st.session_state.resume_code
                 reset(next(iter(TOPICS)))
                 st.rerun()
     st.stop()
@@ -320,6 +374,11 @@ with st.sidebar:
         st.rerun()
     st.caption("Submit the transcript on Blackboard when your instructor asks for it.")
 
+    st.subheader("Resume code")
+    st.code(st.session_state.resume_code, language=None)
+    st.caption("Write this down. If the page reloads or you come back later, enter it on the sign-in "
+               "screen to continue this conversation.")
+
     with st.expander("Lost Dana's file?"):
         st.download_button("Download the full dataset", to_xlsx(DF), "ED_Visits_2025.xlsx", XLSX_MIME,
                            use_container_width=True)
@@ -341,11 +400,13 @@ for i, m in enumerate(st.session_state.chat):
 
 def post_dana(text: str, files: list):
     st.session_state.chat.append({"who": "Dana", "text": text, "img": None, "files": files, "upload": None})
+    save_conversation()
 
 
 if not st.session_state.chat:
     st.info(f"Welcome to the team, {st.session_state.student}. Dana's first request is on its way.")
     st.session_state.api_messages = [{"role": "user", "content": "Hi Dana, I'm ready for my first request."}]
+    save_conversation()
     try:
         with st.spinner("Dana is typing…"):
             reply, files = ask_dana()
@@ -355,6 +416,7 @@ if not st.session_state.chat:
         st.rerun()
     except anthropic.APIError as e:
         st.session_state.api_messages = []
+        save_conversation()
         st.error("Dana can't be reached right now. Wait a minute and reload the page. "
                  f"(Details for your instructor: {e.__class__.__name__})")
         st.stop()
