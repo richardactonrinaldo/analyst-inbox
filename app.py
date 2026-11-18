@@ -274,7 +274,7 @@ def ask_dana() -> tuple[str, list]:
 # ---------------------------------------------------------------- keep conversations across reconnects
 # Streamlit forgets a browser's session when it disconnects (a student switches to Excel for a while,
 # a phone locks). Conversations are kept on the server under the student number, so a returning
-# student only types their student number. A random link token in the page address also restores
+# student only types the last four digits of their student number. A random link token in the page address also restores
 # the conversation on a plain reload, without putting the student number in the address.
 # Saved conversations are lost only when the app itself restarts (after a long idle sleep or a new deploy).
 SAVED_KEYS = ["student", "student_number", "topic", "api_messages", "chat", "tokens"]
@@ -342,22 +342,28 @@ if "student" not in st.session_state:
     st.write("Dana Morgan, Manager of Decision Support at Lakeshore Regional Health, will send you "
              "analysis requests. Do the work in Excel and reply with your results.")
     with st.form("signin"):
-        number = st.text_input("Student number")
-        st.caption("Coming back to a conversation? Your student number is all you need.")
+        number = st.text_input("Last 4 digits of your student number", max_chars=5)
+        st.caption("Coming back to a conversation? These four digits are all you need.")
         name = st.text_input("First name (first visit only)")
         code = st.text_input("Class code (first visit only)", type="password")
         if st.form_submit_button("Open my inbox", type="primary"):
             number = clean_number(number)
-            if not re.fullmatch(r"\d{6,10}", number):
-                st.error("Enter your student number (digits only).")
-            elif restore_conversation(number):
+            saved = conversation_store()["by_number"].get(number)
+            other_name = saved and name.strip() and saved["student"].lower() != name.strip().lower()
+            if not re.fullmatch(r"\d{4,5}", number):
+                st.error("Enter the last 4 digits of your student number.")
+            elif saved and not other_name:
+                restore_conversation(number)
                 link_session(number)
                 st.rerun()
             elif not st.secrets.get("CLASS_CODE") or code.strip() != str(st.secrets["CLASS_CODE"]).strip():
-                st.error("No saved conversation was found for that student number, so this is a new start. "
-                         "Enter the class code your instructor posted on Blackboard.")
+                st.error("No saved conversation was found for those digits, so this is a new start. "
+                         "Enter your first name and the class code your instructor posted on Blackboard.")
             elif not name.strip():
                 st.error("Enter your first name so Dana knows who she's talking to.")
+            elif other_name:
+                st.error("Another student in this class has the same last four digits. Use the last "
+                         "5 digits of your student number instead, here and every time you come back.")
             else:
                 st.session_state.student = name.strip()
                 st.session_state.student_number = number
@@ -376,21 +382,21 @@ with st.sidebar:
         st.rerun()
 
     st.subheader("Conversation")
-    transcript = f"Student: {st.session_state.student} ({st.session_state.student_number})\n\n" + "\n\n".join(
+    transcript = f"Student: {st.session_state.student} (student number ending {st.session_state.student_number})\n\n" + "\n\n".join(
         f"{'Dana Morgan' if m['who'] == 'Dana' else st.session_state.student}: {m['text']}"
         + "".join(f"\n[Attachment: {f['name']}]" for f in m["files"])
         + (f"\n[Attachment: {m['upload']}]" if m["upload"] else "")
         for m in st.session_state.chat)
     st.download_button("Download transcript", transcript,
-                       f"transcript_{st.session_state.student_number}_{datetime.now():%Y%m%d}.txt",
+                       f"transcript_{st.session_state.student}_{st.session_state.student_number}_{datetime.now():%Y%m%d}.txt",
                        use_container_width=True)
     if st.button("Start over", use_container_width=True):
         reset()
         st.rerun()
     st.caption("Submit the transcript on Blackboard when your instructor asks for it.")
 
-    st.caption(f"Signed in as {st.session_state.student} ({st.session_state.student_number}). If the page "
-               "reloads or you come back later, enter your student number to continue.")
+    st.caption(f"Signed in as {st.session_state.student} (…{st.session_state.student_number}). If the page "
+               "reloads or you come back later, enter these digits to continue.")
 
     with st.expander("Lost Dana's file?"):
         st.download_button("Download the full dataset", to_xlsx(DF), "ED_Visits_2025.xlsx", XLSX_MIME,
