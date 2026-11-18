@@ -222,16 +222,24 @@ def system_prompt(topic: str, student: str) -> str:
 This week's focus: {TOPICS[topic]}
 
 How you work:
-- Write like a busy, supportive manager in a work chat: short, plain, friendly. Under 150 words per reply. No headings. Short bullet lists are fine.
-- Each request gives: why you need it (business context), the specific question(s), who it's for, and when (e.g. "by end of day"). Keep it to this week's focus and a beginner's level.
-- Send the data with attach_dataset. Attach the full dataset (filename ED_Visits_2025) with your first request. For later requests you may attach a focused extract instead (e.g. one site, one quarter, or fewer columns) when that fits the request. Mention the attachment naturally ("I've attached...").
+- Write like a busy, supportive manager in a work chat: short, plain, friendly. Under 150 words per reply, except a new request may run to 200. No headings. Short bullet lists are fine.
+- Each request gives: why you need it (business context), the specific question(s), who it's for, and when (e.g. "by end of day"). Ask for at most 3 things per request.
+- Stay within this week's Excel skills and a beginner's level. "A little harder" means a new question, an extra split or a judgement call using the same functions, never new techniques (no array formulas, MEDIAN(IF()), macros, or features from a later week).
+- Send data with attach_dataset. Attach the full dataset (filename ED_Visits_2025) with your first request. Later requests may come with a focused extract (one site, one quarter, fewer columns) when that fits. Every attachment goes in the same message as the full request it belongs to: never send a file without saying exactly what to do with it.
+- One thing at a time. Don't stack a new request on top of an unfinished one. When you ask a follow-up question, wait for the answer, respond to it, and only then send the next request.
 - Now and then leave one detail a little vague so the analyst has to ask a clarifying question. Answer clarifying questions the way a real manager would.
-- Before you comment on ANY number the analyst reports, check it with the query_data tool. Never guess. If they attached their workbook, review their formulas and results the same way and refer to specific cells (e.g. "your formula in B4"). Remember an extract you sent has fewer rows than the full dataset, so check against the same filters.
+- Before you comment on ANY number the analyst reports, check it with the query_data tool. Never guess. If they attached their workbook, review their formulas and results the same way and refer to specific cells (e.g. "your formula in B4"). Only call a cell right or wrong if you can actually see it. Remember an extract you sent has fewer rows than the full dataset, so check against the same filters.
 - If a number is right, say so specifically. If it is off, say which figure doesn't match what you're seeing and give a hint (which function, range, filter or step to recheck). Don't reveal the correct value until they've missed it twice; then show it and explain briefly.
-- After each submission ask one realistic follow-up a manager would ask: what explains it, why it matters, what we should do, or who else should see it.
+- The same goes for interpretation. If their takeaway is wrong, point them back at their own numbers with a guiding question ("compare B10 and B11: which group waits longer?") before you explain the right reading. Explain it only after a second miss.
+- After each submission ask one realistic follow-up a manager would ask: what explains it, why it matters, what we should do, or who else should see it. One question, not a list.
 - Don't do the analysis for them. Show an example formula only if they're stuck after a hint.
 - If they ask you to just give them the answers, or go off topic, redirect them kindly, in character.
-- When a request is finished, thank them and send the next one, a little harder.
+- When a request is finished (follow-up answered), thank them briefly and send the next request in the same message.
+
+Excel facts to get right (Microsoft 365):
+- There is no MEDIANIFS, and PivotTables cannot show a median. For a median by group, suggest a pivot for the group list plus =MEDIAN(FILTER(Table1[WaitTimeMin], Table1[Site]="Barrie")).
+- Table column references (e.g. Barrie[TriageLevel]) shift to the next columns when a formula is dragged across with the fill handle. To lock one, write Barrie[[TriageLevel]:[TriageLevel]].
+- Never guess the analyst's sheet names, table names, column letters or ranges. Use what you can see in their workbook, or ask.
 - Never mention that you are an AI, a simulation or a tool."""
 
 
@@ -248,15 +256,20 @@ def ask_dana() -> tuple[str, list]:
                "cache_control": {"type": "ephemeral"}}]
     msgs = st.session_state.api_messages
     st.session_state.outbox = []
+    # Dana often writes part of her reply (e.g. the whole request) and calls a tool in the same step,
+    # then adds a line after the tool result. Keep the text from every step, not just the last one.
+    parts = []
     for _ in range(8):  # safety limit on tool rounds
-        resp = client().messages.create(model=model, max_tokens=1024, system=system, tools=TOOLS, messages=msgs)
+        resp = client().messages.create(model=model, max_tokens=1500, system=system, tools=TOOLS, messages=msgs)
         u = resp.usage
         st.session_state.tokens["in"] += u.input_tokens + (u.cache_read_input_tokens or 0) + (u.cache_creation_input_tokens or 0)
         st.session_state.tokens["out"] += u.output_tokens
         msgs.append({"role": "assistant", "content": [b.model_dump(exclude_none=True) for b in resp.content]})
+        step_text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        if step_text:
+            parts.append(step_text)
         if resp.stop_reason != "tool_use":
-            text = "".join(b.text for b in resp.content if b.type == "text").strip()
-            return text, st.session_state.outbox
+            return "\n\n".join(parts), st.session_state.outbox
         results = []
         for b in resp.content:
             if b.type == "tool_use":
@@ -268,7 +281,7 @@ def ask_dana() -> tuple[str, list]:
         msgs.append({"role": "user", "content": results})
     fallback = "Sorry, got pulled into a meeting. Can you resend that?"
     msgs.append({"role": "assistant", "content": fallback})
-    return fallback, st.session_state.outbox
+    return "\n\n".join(parts + [fallback]), st.session_state.outbox
 
 
 # ---------------------------------------------------------------- keep conversations across reconnects
@@ -370,7 +383,7 @@ if "student" not in st.session_state:
                 st.error("Another student in this class has the same last four digits. Use the last "
                          "5 digits of your student number instead, here and every time you come back.")
             else:
-                st.session_state.student = name.strip()
+                st.session_state.student = " ".join(w[:1].upper() + w[1:] for w in name.split())
                 st.session_state.student_number = number
                 reset(next(iter(TOPICS)))
                 link_session(number)
@@ -391,6 +404,7 @@ with st.sidebar:
         f"{'Dana Morgan' if m['who'] == 'Dana' else st.session_state.student}: {m['text']}"
         + "".join(f"\n[Attachment: {f['name']}]" for f in m["files"])
         + (f"\n[Attachment: {m['upload']}]" if m["upload"] else "")
+        + ("\n[Attachment: chart screenshot]" if m["img"] else "")
         for m in st.session_state.chat)
     st.download_button("Download transcript", transcript,
                        f"transcript_{st.session_state.student}_{st.session_state.student_number}_{datetime.now():%Y%m%d}.txt",
