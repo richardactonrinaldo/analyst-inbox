@@ -4,7 +4,7 @@ Students in HIFN1009 chat with **Dana Morgan**, a pretend Manager of Decision Su
 
 Dana sends the data as an Excel attachment (the full dataset with her first request, focused extracts later). Students can attach their own Excel workbook, and Dana reviews their formulas and results cell by cell, or a chart screenshot.
 
-Weekly focus options: descriptive statistics, PivotTables, charts, and presenting results.
+Module focus options: descriptive statistics, PivotTables, charts, and presenting results.
 
 ## Deploy on Streamlit Community Cloud (free)
 

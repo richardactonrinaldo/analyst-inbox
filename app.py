@@ -186,18 +186,18 @@ TOOL_FUNCS = {"query_data": query_data, "attach_dataset": attach_dataset}
 
 # ---------------------------------------------------------------- persona
 TOPICS = {
-    "Week A · Descriptive statistics": (
+    "Module A · Descriptive statistics": (
         "Descriptive statistics in Excel: AVERAGE, MEDIAN, MIN, MAX, COUNT, COUNTIF, COUNTIFS, AVERAGEIF, "
         "STDEV.S. Requests should need 2-4 numbers, sometimes split by one category (a site or triage level)."),
-    "Week B · PivotTables": (
+    "Module B · PivotTables": (
         "PivotTables in Excel: counts and averages broken down by one or two categories (Site, Month, "
         "TriageLevel, Disposition, AgeGroup). Ask for a small summary table and one observation from it."),
-    "Week C · Charts and visualizations": (
+    "Module C · Charts and visualizations": (
         "Charts in Excel: column/bar to compare categories, line for trends by Month, pie only for 2-4 parts "
         "of a whole. Ask for one chart for a specific audience. Judge chart choice, title, axis labels, "
         "sorting, and whether an executive gets the point in 5 seconds. Charts can't be seen inside an "
         "uploaded workbook, so ask for a screenshot of the chart."),
-    "Week D · Presenting results": (
+    "Module D · Presenting results": (
         "Presenting results: the analyst writes a 3-5 sentence summary or 3 talking points for the VP of "
         "Patient Care. Coach on leading with the answer, plain language, one key number per point, the "
         "'so what', and a recommendation. After their summary, play the VP for one tough question, then "
@@ -219,12 +219,12 @@ def system_prompt(topic: str, student: str) -> str:
 
 {SCHEMA}
 
-This week's focus: {TOPICS[topic]}
+This module's focus: {TOPICS[topic]}
 
 How you work:
 - Write like a busy, supportive manager in a work chat: short, plain, friendly. Under 150 words per reply, except a new request may run to 200. No headings. Short bullet lists are fine.
 - Each request gives: why you need it (business context), the specific question(s), who it's for, and when (e.g. "by end of day"). Ask for at most 3 things per request.
-- Stay within this week's Excel skills and a beginner's level. "A little harder" means a new question, an extra split or a judgement call using the same functions, never new techniques (no array formulas, MEDIAN(IF()), macros, or features from a later week).
+- Stay within this module's Excel skills and a beginner's level. "A little harder" means a new question, an extra split or a judgement call using the same functions, never new techniques (no array formulas, MEDIAN(IF()), macros, or features from a later module).
 - Send data with attach_dataset. Attach the full dataset (filename ED_Visits_2025) with your first request. Later requests may come with a focused extract (one site, one quarter, fewer columns) when that fits. Every attachment goes in the same message as the full request it belongs to: never send a file without saying exactly what to do with it.
 - One thing at a time. Don't stack a new request on top of an unfinished one. When you ask a follow-up question, wait for the answer, respond to it, and only then send the next request.
 - Now and then leave one detail a little vague so the analyst has to ask a clarifying question. Answer clarifying questions the way a real manager would.
@@ -392,7 +392,7 @@ if "student" not in st.session_state:
 
 # ---------------------------------------------------------------- sidebar
 with st.sidebar:
-    st.subheader("This week's focus")
+    st.subheader("This module's focus")
     topic = st.selectbox("Focus", list(TOPICS), index=list(TOPICS).index(st.session_state.topic),
                          label_visibility="collapsed")
     if topic != st.session_state.topic:
