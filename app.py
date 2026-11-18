@@ -273,40 +273,51 @@ def ask_dana() -> tuple[str, list]:
 
 # ---------------------------------------------------------------- keep conversations across reconnects
 # Streamlit forgets a browser's session when it disconnects (a student switches to Excel for a while,
-# a phone locks). Conversations are kept on the server under a short resume code, which is also put
-# in the page address, so reconnecting or reopening the link picks up where the student left off.
-# They're lost only when the app itself restarts (after a long idle sleep or a new deploy).
-SAVED_KEYS = ["student", "topic", "api_messages", "chat", "tokens"]
+# a phone locks). Conversations are kept on the server under the student number, so a returning
+# student only types their student number. A random link token in the page address also restores
+# the conversation on a plain reload, without putting the student number in the address.
+# Saved conversations are lost only when the app itself restarts (after a long idle sleep or a new deploy).
+SAVED_KEYS = ["student", "student_number", "topic", "api_messages", "chat", "tokens"]
 KEEP_DAYS = 14
-CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I/L to avoid typos
 
 
 @st.cache_resource
 def conversation_store() -> dict:
-    return {}
+    return {"by_number": {}, "by_link": {}}
+
+
+def clean_number(raw: str) -> str:
+    return re.sub(r"\s+", "", raw or "")
 
 
 def save_conversation():
-    code = st.session_state.get("resume_code")
-    if not code:
+    number = st.session_state.get("student_number")
+    if not number:
         return
     store = conversation_store()
-    store[code] = {"saved": time.time(), **{k: st.session_state[k] for k in SAVED_KEYS if k in st.session_state}}
+    store["by_number"][number] = {"saved": time.time(),
+                                  **{k: st.session_state[k] for k in SAVED_KEYS if k in st.session_state}}
     cutoff = time.time() - KEEP_DAYS * 86400
-    for old in [c for c, v in store.items() if v["saved"] < cutoff]:
-        store.pop(old, None)
+    for old in [n for n, v in store["by_number"].items() if v["saved"] < cutoff]:
+        store["by_number"].pop(old, None)
+    for tok in [t for t, n in store["by_link"].items() if n not in store["by_number"]]:
+        store["by_link"].pop(tok, None)
 
 
-def restore_conversation(code: str) -> bool:
-    code = (code or "").strip().upper()
-    saved = conversation_store().get(code)
+def link_session(number: str):
+    """Put a random token in the page address so a reload restores this conversation."""
+    token = secrets.token_urlsafe(8)
+    conversation_store()["by_link"][token] = number
+    st.query_params["s"] = token
+
+
+def restore_conversation(number: str) -> bool:
+    saved = conversation_store()["by_number"].get(number)
     if not saved:
         return False
     for k in SAVED_KEYS:
         st.session_state[k] = saved[k]
     st.session_state.outbox = []
-    st.session_state.resume_code = code
-    st.query_params["s"] = code
     return True
 
 
@@ -321,7 +332,9 @@ def reset(topic=None):
 
 
 if "student" not in st.session_state and st.query_params.get("s"):
-    restore_conversation(st.query_params["s"])
+    linked = conversation_store()["by_link"].get(st.query_params["s"])
+    if not (linked and restore_conversation(linked)):
+        st.query_params.clear()
 
 # ---------------------------------------------------------------- sign-in gate
 if "student" not in st.session_state:
@@ -329,25 +342,27 @@ if "student" not in st.session_state:
     st.write("Dana Morgan, Manager of Decision Support at Lakeshore Regional Health, will send you "
              "analysis requests. Do the work in Excel and reply with your results.")
     with st.form("signin"):
-        name = st.text_input("Your first name")
-        code = st.text_input("Class code", type="password")
-        resume = st.text_input("Resume code (optional)", placeholder="e.g. K7RM4Q",
-                               help="Enter the code from your sidebar to continue an earlier conversation.")
+        number = st.text_input("Student number")
+        st.caption("Coming back to a conversation? Your student number is all you need.")
+        name = st.text_input("First name (first visit only)")
+        code = st.text_input("Class code (first visit only)", type="password")
         if st.form_submit_button("Open my inbox", type="primary"):
-            if code.strip() != str(st.secrets.get("CLASS_CODE", "")).strip() or not st.secrets.get("CLASS_CODE"):
-                st.error("That class code isn't right. Check the code your instructor posted on Blackboard.")
-            elif resume.strip():
-                if restore_conversation(resume):
-                    st.rerun()
-                st.error("That resume code wasn't found. It may have expired when the app restarted. "
-                         "Leave it blank to start a new conversation.")
+            number = clean_number(number)
+            if not re.fullmatch(r"\d{6,10}", number):
+                st.error("Enter your student number (digits only).")
+            elif restore_conversation(number):
+                link_session(number)
+                st.rerun()
+            elif not st.secrets.get("CLASS_CODE") or code.strip() != str(st.secrets["CLASS_CODE"]).strip():
+                st.error("No saved conversation was found for that student number, so this is a new start. "
+                         "Enter the class code your instructor posted on Blackboard.")
             elif not name.strip():
                 st.error("Enter your first name so Dana knows who she's talking to.")
             else:
                 st.session_state.student = name.strip()
-                st.session_state.resume_code = "".join(secrets.choice(CODE_CHARS) for _ in range(6))
-                st.query_params["s"] = st.session_state.resume_code
+                st.session_state.student_number = number
                 reset(next(iter(TOPICS)))
+                link_session(number)
                 st.rerun()
     st.stop()
 
@@ -361,23 +376,21 @@ with st.sidebar:
         st.rerun()
 
     st.subheader("Conversation")
-    transcript = "\n\n".join(
+    transcript = f"Student: {st.session_state.student} ({st.session_state.student_number})\n\n" + "\n\n".join(
         f"{'Dana Morgan' if m['who'] == 'Dana' else st.session_state.student}: {m['text']}"
         + "".join(f"\n[Attachment: {f['name']}]" for f in m["files"])
         + (f"\n[Attachment: {m['upload']}]" if m["upload"] else "")
         for m in st.session_state.chat)
-    st.download_button("Download transcript", transcript or "(No messages yet)",
-                       f"transcript_{st.session_state.student}_{datetime.now():%Y%m%d}.txt",
+    st.download_button("Download transcript", transcript,
+                       f"transcript_{st.session_state.student_number}_{datetime.now():%Y%m%d}.txt",
                        use_container_width=True)
     if st.button("Start over", use_container_width=True):
         reset()
         st.rerun()
     st.caption("Submit the transcript on Blackboard when your instructor asks for it.")
 
-    st.subheader("Resume code")
-    st.code(st.session_state.resume_code, language=None)
-    st.caption("Write this down. If the page reloads or you come back later, enter it on the sign-in "
-               "screen to continue this conversation.")
+    st.caption(f"Signed in as {st.session_state.student} ({st.session_state.student_number}). If the page "
+               "reloads or you come back later, enter your student number to continue.")
 
     with st.expander("Lost Dana's file?"):
         st.download_button("Download the full dataset", to_xlsx(DF), "ED_Visits_2025.xlsx", XLSX_MIME,
