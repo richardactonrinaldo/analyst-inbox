@@ -235,7 +235,7 @@ How you work:
 - The same goes for interpretation. If their takeaway is wrong, point them back at their own numbers with a guiding question ("compare B10 and B11: which group waits longer?") before you explain the right reading. Explain it only after a second miss.
 - Occasionally (about every second or third request, and always when a result looks copied rather than built, e.g. correct numbers with formulas they don't seem to understand), once their results are right, run a quick check that they understand their own work: ask them to explain one of their formulas in their own words ("walk me through B5"), or to predict a small change ("if you switched B5 to Orillia, would it go up or down, and roughly to what?"). Check any number they give with query_data. Pick a different cell or change each time.
 - Then ask one realistic follow-up a manager would ask: what explains it, why it matters, what we should do, or who else should see it. One question per message, not a list.
-- When they say they're stopping for the day (or say goodbye), don't sign off yet. Ask one reflection question: what tripped them up today, and how did they work through it? After they answer, respond in a sentence or two, then sign off and remind them to download the transcript of our chat.
+- When they say they're stopping for the day (or say goodbye), don't sign off yet. Ask one reflection question: what tripped them up today, and how did they work through it? After they answer, respond in a sentence or two and sign off; your end-of-day check-in notes follow automatically. If they said goodbye in the chat instead of using the "Finish for today" button, ask them to click it so you can send them their check-in.
 - Don't do the analysis for them. Show an example formula only if they're stuck after a hint.
 - If they ask you to just give them the answers, or go off topic, redirect them kindly, in character.
 - A request is finished when the prediction, results, any understanding check, and follow-up are done. Then thank them briefly and send the next request in the same message.
@@ -288,13 +288,59 @@ def ask_dana() -> tuple[str, list]:
     return "\n\n".join(parts + [fallback]), st.session_state.outbox
 
 
+CHECKIN_PROMPT = """You are Dana Morgan, Manager of Decision Support at Lakeshore Regional Health. You've just finished a working session with {student}, a junior data analyst on your team (in reality, a beginner Excel student in a health informatics course). This session's focus: {topic}.
+
+Write {student} a short end-of-day check-in, in the style of a gentle, constructive workplace performance review. It is formative feedback only: no grades, scores or ratings.
+
+Use exactly this format (Markdown):
+
+**End-of-day check-in: {student}, {module}**
+
+**What went well**
+2-3 sentences naming specific strengths, with concrete examples from their actual work today (a formula, a check they ran, a good question, a solid takeaway).
+
+**Where to grow**
+- *Skill name.* At most two bullets. Frame each as a skill to build, not a mistake. Say briefly what you noticed and one concrete way to practise it.
+
+**Focus for next time**
+One sentence: the single most useful habit to work on.
+
+End with one warm, sincere sentence.
+
+Rules:
+- Base everything on the conversation below. Never invent strengths or problems. If they did little work, say so kindly and keep it short.
+- Be warm and encouraging but honest: real feedback, delivered kindly.
+- Mention their reflection answer if it showed insight.
+- Under 220 words. Plain, friendly language. Never mention that you are an AI or that this is a simulation.
+
+The conversation:
+{transcript}"""
+
+
+def write_checkin() -> str:
+    """Dana's end-of-day performance-review style feedback, from the whole conversation."""
+    convo = "\n\n".join(
+        f"{'Dana' if m['who'] == 'Dana' else st.session_state.student}: {m['text']}"
+        + (f" [attached workbook: {m['upload']}]" if m["upload"] else "")
+        + (" [attached chart screenshot]" if m["img"] else "")
+        for m in st.session_state.chat if not m.get("checkin"))
+    module = st.session_state.topic.split(" · ")[0]
+    prompt = CHECKIN_PROMPT.format(student=st.session_state.student, topic=TOPICS[st.session_state.topic],
+                                   module=module, transcript=convo)
+    resp = client().messages.create(model=st.secrets.get("MODEL", "claude-sonnet-5-5"), max_tokens=800,
+                                    messages=[{"role": "user", "content": prompt}])
+    st.session_state.tokens["in"] += resp.usage.input_tokens
+    st.session_state.tokens["out"] += resp.usage.output_tokens
+    return "".join(b.text for b in resp.content if b.type == "text").strip()
+
+
 # ---------------------------------------------------------------- keep conversations across reconnects
 # Streamlit forgets a browser's session when it disconnects (a student switches to Excel for a while,
 # a phone locks). Conversations are kept on the server under the student number, so a returning
 # student only types the last four digits of their student number. A random link token in the page address also restores
 # the conversation on a plain reload, without putting the student number in the address.
 # Saved conversations are lost only when the app itself restarts (after a long idle sleep or a new deploy).
-SAVED_KEYS = ["student", "student_number", "topic", "api_messages", "chat", "tokens"]
+SAVED_KEYS = ["student", "student_number", "topic", "api_messages", "chat", "tokens", "wrap_stage"]
 KEEP_DAYS = 14
 
 
@@ -338,12 +384,13 @@ def restore_conversation(number: str) -> bool:
     if not saved:
         return False
     for k in SAVED_KEYS:
-        st.session_state[k] = saved[k]
+        st.session_state[k] = saved.get(k, 0 if k == "wrap_stage" else None)
     st.session_state.outbox = []
     return True
 
 
 def reset(topic=None):
+    st.session_state.wrap_stage = 0
     st.session_state.api_messages = []
     st.session_state.chat = []  # dicts: who, text, img, files, upload
     st.session_state.tokens = {"in": 0, "out": 0}
@@ -435,7 +482,11 @@ st.caption("Manager, Decision Support · Lakeshore Regional Health")
 
 for i, m in enumerate(st.session_state.chat):
     with st.chat_message("assistant" if m["who"] == "Dana" else "user", avatar="🩺" if m["who"] == "Dana" else None):
-        st.markdown(m["text"])
+        if m.get("checkin"):
+            with st.container(border=True):
+                st.markdown(m["text"])
+        else:
+            st.markdown(m["text"])
         if m["img"]:
             st.image(m["img"])
         if m["upload"]:
@@ -467,6 +518,9 @@ if not st.session_state.chat:
                  f"(Details for your instructor: {e.__class__.__name__})")
         st.stop()
 
+if st.session_state.pop("checkin_failed", False):
+    st.warning("Dana couldn't write your end-of-day check-in just now. Click Finish for today to try again.")
+
 sent = sum(1 for m in st.session_state.chat if m["who"] != "Dana")
 if sent >= MAX_STUDENT_MESSAGES:
     st.warning("You've reached the message limit for this session. Download your transcript, then press Start over.")
@@ -493,6 +547,7 @@ if prompt or wrap_up:
         text = entry["text"] = "(See attached.)"
     content.append({"type": "text", "text": text})
     st.session_state.chat.append(entry)
+    answering_reflection = st.session_state.get("wrap_stage", 0) == 1 and not wrap_up
     before = len(st.session_state.api_messages)
     st.session_state.api_messages.append({"role": "user", "content": content})
     try:
@@ -505,4 +560,16 @@ if prompt or wrap_up:
         st.error("Your message didn't go through. Wait a moment and send it again. "
                  f"(Details for your instructor: {e.__class__.__name__})")
         st.stop()
+    if wrap_up:
+        st.session_state.wrap_stage = 1          # Dana has asked the reflection question
+    elif answering_reflection:
+        st.session_state.wrap_stage = 0
+        try:
+            with st.spinner("Dana is writing your end-of-day check-in…"):
+                note = write_checkin()
+            st.session_state.chat.append({"who": "Dana", "text": note, "img": None, "files": [],
+                                          "upload": None, "checkin": True})
+        except anthropic.APIError:
+            st.session_state.checkin_failed = True
+    save_conversation()
     st.rerun()
