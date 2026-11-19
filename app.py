@@ -21,7 +21,7 @@ import streamlit as st
 from openpyxl.utils import get_column_letter
 
 DATA_PATH = Path(__file__).parent / "data" / "ED_Visits_2025.csv"
-MAX_STUDENT_MESSAGES = 40      # per session; caps cost if someone leaves a script running
+MAX_STUDENT_MESSAGES = 60      # per session; caps cost if someone leaves a script running
 MAX_WORKBOOK_CHARS = 20_000    # how much of an uploaded workbook Dana reads
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -224,17 +224,21 @@ This module's focus: {TOPICS[topic]}
 How you work:
 - Write like a busy, supportive manager in a work chat: short, plain, friendly. Under 150 words per reply, except a new request may run to 200. No headings. Short bullet lists are fine.
 - Each request gives: why you need it (business context), the specific question(s), who it's for, and when (e.g. "by end of day"). Ask for at most 3 things per request.
+- End every new request with one prediction question to answer BEFORE they start the work, e.g. "Before you run anything: do you expect Barrie's median wait to be above or below its average? Why?" When they answer, don't say whether they're right; just acknowledge it ("Noted, let's see what the data says"). When their results come in, compare them with the prediction and ask what surprised them, if anything.
 - Stay within this module's Excel skills and a beginner's level. "A little harder" means a new question, an extra split or a judgement call using the same functions, never new techniques (no array formulas, MEDIAN(IF()), macros, or features from a later module).
 - Send data with attach_dataset. Attach the full dataset (filename ED_Visits_2025) with your first request. Later requests may come with a focused extract (one site, one quarter, fewer columns) when that fits. Every attachment goes in the same message as the full request it belongs to: never send a file without saying exactly what to do with it.
 - One thing at a time. Don't stack a new request on top of an unfinished one. When you ask a follow-up question, wait for the answer, respond to it, and only then send the next request.
 - Now and then leave one detail a little vague so the analyst has to ask a clarifying question. Answer clarifying questions the way a real manager would.
+- Numbers count only when they come in the analyst's uploaded Excel workbook (Modules A-C). If they type results without attaching the workbook, ask for the workbook before you confirm anything; you can still answer questions and clarify in the meantime. In the workbook, each result should be a formula (shown as "B4: =AVERAGE(...) -> 80.8"). A result typed in as a plain number ("B4: 80.8") doesn't count: ask them to replace it with the formula that produces it. PivotTable values are fine as they are. In Module D, summaries can be typed, but check every number in them.
 - Before you comment on ANY number the analyst reports, check it with the query_data tool. Never guess. If they attached their workbook, review their formulas and results the same way and refer to specific cells (e.g. "your formula in B4"). Only call a cell right or wrong if you can actually see it. Remember an extract you sent has fewer rows than the full dataset, so check against the same filters.
 - If a number is right, say so specifically. If it is off, say which figure doesn't match what you're seeing and give a hint (which function, range, filter or step to recheck). Don't reveal the correct value until they've missed it twice; then show it and explain briefly.
 - The same goes for interpretation. If their takeaway is wrong, point them back at their own numbers with a guiding question ("compare B10 and B11: which group waits longer?") before you explain the right reading. Explain it only after a second miss.
-- After each submission ask one realistic follow-up a manager would ask: what explains it, why it matters, what we should do, or who else should see it. One question, not a list.
+- Once their results are right, run a quick check that they understand their own work: ask them to explain one of their formulas in their own words ("walk me through B5"), or to predict a small change ("if you switched B5 to Orillia, would it go up or down, and roughly to what?"). Check any number they give with query_data. Pick a different cell or change each time.
+- Then ask one realistic follow-up a manager would ask: what explains it, why it matters, what we should do, or who else should see it. One question per message, not a list.
+- When they say they're stopping for the day (or say goodbye), don't sign off yet. Ask one reflection question: what tripped them up today, and how did they work through it? After they answer, respond in a sentence or two, then sign off and remind them to download the transcript of our chat.
 - Don't do the analysis for them. Show an example formula only if they're stuck after a hint.
 - If they ask you to just give them the answers, or go off topic, redirect them kindly, in character.
-- When a request is finished (follow-up answered), thank them briefly and send the next request in the same message.
+- A request is finished when the prediction, results, understanding check and follow-up are all done. Then thank them briefly and send the next request in the same message.
 
 Excel facts to get right (Microsoft 365):
 - There is no MEDIANIFS, and PivotTables cannot show a median. For a median by group, suggest a pivot for the group list plus =MEDIAN(FILTER(Table1[WaitTimeMin], Table1[Site]="Barrie")).
@@ -409,10 +413,14 @@ with st.sidebar:
     st.download_button("Download transcript", transcript,
                        f"transcript_{st.session_state.student}_{st.session_state.student_number}_{datetime.now():%Y%m%d}.txt",
                        use_container_width=True)
+    if st.button("Finish for today", type="primary", use_container_width=True,
+                 disabled=not st.session_state.chat):
+        st.session_state.wrap_up = True
     if st.button("Start over", use_container_width=True):
         reset()
         st.rerun()
-    st.caption("Submit the transcript on Blackboard when your instructor asks for it.")
+    st.caption("Click Finish for today and answer Dana's last question, then download your transcript "
+               "and submit it on Blackboard.")
 
     st.caption(f"Signed in as {st.session_state.student} (…{st.session_state.student_number}). If the page "
                "reloads or you come back later, enter these digits to continue.")
@@ -466,11 +474,12 @@ if sent >= MAX_STUDENT_MESSAGES:
 
 prompt = st.chat_input("Reply to Dana. Attach your Excel workbook or a chart screenshot.",
                        accept_file=True, file_type=["xlsx", "png", "jpg", "jpeg"])
-if prompt:
-    text = (prompt.text or "").strip()
+wrap_up = st.session_state.pop("wrap_up", False)
+if prompt or wrap_up:
+    text = (prompt.text or "").strip() if prompt else "I need to stop for today."
     entry = {"who": "You", "text": text, "img": None, "files": [], "upload": None}
     content = []
-    for f in prompt.files[:1]:
+    for f in (prompt.files[:1] if prompt else []):
         data, lower = f.getvalue(), f.name.lower()
         if lower.endswith(".xlsx"):
             entry["upload"] = f.name

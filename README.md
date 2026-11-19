@@ -23,7 +23,7 @@ Usage and cost appear in the Claude Console under Usage.
 ## Cost controls
 
 - The class code keeps strangers from using your credits.
-- Each session is capped at 40 student messages (`MAX_STUDENT_MESSAGES` in `app.py`).
+- Each session is capped at 60 student messages (`MAX_STUDENT_MESSAGES` in `app.py`).
 - Prepaid credits with auto-reload off can't be exceeded.
 - `MODEL = "claude-haiku-5-5"` cuts cost by roughly 20x.
 
