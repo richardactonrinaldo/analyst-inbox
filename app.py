@@ -6,6 +6,7 @@ Runs on Streamlit. Needs these secrets (Streamlit Cloud > App > Settings > Secre
     MODEL = "claude-sonnet-5-5"                   # optional; "claude-haiku-5-5" is cheaper
 """
 import base64
+import difflib
 import io
 import json
 import re
@@ -125,9 +126,14 @@ def read_workbook(data: bytes, filename: str) -> str:
         if getattr(ws_f, "_charts", None):
             out.append(f"(This sheet has {len(ws_f._charts)} chart(s); you can't see charts in the file, "
                        "so ask for a screenshot if you need to review one.)")
-        big = rows > 60  # looks like a raw data sheet: show its header and any formulas only
+        # A raw copy of the dataset (its header matches the dataset's columns) is too big to show in
+        # full, so show its header and any formulas only. Every other sheet, including PivotTable
+        # sheets, is shown in full.
+        header = [str(c.value) for c in ws_f[1] if c.value is not None]
+        has_pivot = bool(getattr(ws_f, "_pivots", None))
+        big = (not has_pivot and rows > 60
+               and len(set(header) & set(DF.columns)) >= min(5, len(header)) and len(header) >= 3)
         if big:
-            header = [str(c.value) for c in ws_f[1] if c.value is not None]
             out.append(f"Raw data sheet. Header row: {', '.join(header)}. Showing only formula cells:")
         for row in ws_f.iter_rows():
             for c in row:
@@ -226,6 +232,7 @@ How you work:
 - Each request gives: why you need it (business context), the specific question(s), who it's for, and when (e.g. "by end of day"). Ask for at most 3 things per request.
 - End every new request with one prediction question to answer BEFORE they start the work, e.g. "Before you run anything: do you expect Barrie's median wait to be above or below its average? Why?" When they answer, don't say whether they're right; just acknowledge it ("Noted, let's see what the data says"). When their results come in, compare them with the prediction and ask what surprised them, if anything.
 - Stay within this module's Excel skills and a beginner's level. "A little harder" means a new question, an extra split or a judgement call using the same functions, never new techniques (no array formulas, MEDIAN(IF()), macros, or features from a later module).
+- If you write your message and then call a tool, don't repeat that message after the tool result. Add only what's new, or nothing.
 - Send data with attach_dataset. Attach the full dataset (filename ED_Visits_2025) with your first request. Later requests may come with a focused extract (one site, one quarter, fewer columns) when that fits. Every attachment goes in the same message as the full request it belongs to: never send a file without saying exactly what to do with it.
 - One thing at a time. Don't stack a new request on top of an unfinished one. When you ask a follow-up question, wait for the answer, respond to it, and only then send the next request.
 - Now and then leave one detail a little vague so the analyst has to ask a clarifying question. Answer clarifying questions the way a real manager would.
@@ -264,15 +271,20 @@ def ask_dana() -> tuple[str, list]:
     # then adds a line after the tool result. Keep the text from every step, not just the last one.
     parts = []
     for _ in range(8):  # safety limit on tool rounds
-        resp = client().messages.create(model=model, max_tokens=1500, system=system, tools=TOOLS, messages=msgs)
+        resp = client().messages.create(model=model, max_tokens=4000, system=system, tools=TOOLS, messages=msgs)
         u = resp.usage
         st.session_state.tokens["in"] += u.input_tokens + (u.cache_read_input_tokens or 0) + (u.cache_creation_input_tokens or 0)
         st.session_state.tokens["out"] += u.output_tokens
         msgs.append({"role": "assistant", "content": [b.model_dump(exclude_none=True) for b in resp.content]})
         step_text = "".join(b.text for b in resp.content if b.type == "text").strip()
-        if step_text:
+        # Dana sometimes repeats her whole message after a tool call; keep only new text.
+        repeated = any(step_text in p or difflib.SequenceMatcher(None, step_text, p).ratio() > 0.8
+                       for p in parts)
+        if step_text and not repeated:
             parts.append(step_text)
         if resp.stop_reason != "tool_use":
+            if resp.stop_reason == "max_tokens" and parts:
+                parts[-1] = trim_unfinished(parts[-1])
             return "\n\n".join(parts), st.session_state.outbox
         results = []
         for b in resp.content:
@@ -327,11 +339,18 @@ def write_checkin() -> str:
     module = st.session_state.topic.split(" · ")[0]
     prompt = CHECKIN_PROMPT.format(student=st.session_state.student, topic=TOPICS[st.session_state.topic],
                                    module=module, transcript=convo)
-    resp = client().messages.create(model=st.secrets.get("MODEL", "claude-sonnet-5-5"), max_tokens=800,
+    resp = client().messages.create(model=st.secrets.get("MODEL", "claude-sonnet-5-5"), max_tokens=3000,
                                     messages=[{"role": "user", "content": prompt}])
     st.session_state.tokens["in"] += resp.usage.input_tokens
     st.session_state.tokens["out"] += resp.usage.output_tokens
-    return "".join(b.text for b in resp.content if b.type == "text").strip()
+    text = "".join(b.text for b in resp.content if b.type == "text").strip()
+    return trim_unfinished(text) if resp.stop_reason == "max_tokens" else text
+
+
+def trim_unfinished(text: str) -> str:
+    """If a reply ran out of room, cut it back to its last complete sentence."""
+    cut = max(text.rfind(". "), text.rfind(".\n"), text.rfind("! "), text.rfind("? "))
+    return text[:cut + 1] if cut > len(text) // 2 else text
 
 
 # ---------------------------------------------------------------- keep conversations across reconnects
