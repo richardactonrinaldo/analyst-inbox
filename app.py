@@ -257,6 +257,23 @@ Excel facts to get right (Microsoft 365):
 
 
 # ---------------------------------------------------------------- Claude call
+def as_input_block(b) -> dict:
+    """Copy a block of Claude's reply into the history with only the fields the API accepts back.
+    (Newer SDK versions add extra response-only fields, which the API rejects if echoed.)"""
+    if b.type == "text":
+        return {"type": "text", "text": b.text}
+    return {"type": "tool_use", "id": b.id, "name": b.name, "input": b.input}
+
+
+def api_error_detail(e: Exception) -> str:
+    """Short, readable reason from an API error, for the instructor."""
+    msg = getattr(e, "message", "") or str(e)
+    body = getattr(e, "body", None)
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        msg = body["error"].get("message", msg)
+    return f"{e.__class__.__name__}: {msg}"[:300]
+
+
 @st.cache_resource
 def client():
     return anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
@@ -277,7 +294,7 @@ def ask_dana() -> tuple[str, list]:
         u = resp.usage
         st.session_state.tokens["in"] += u.input_tokens + (u.cache_read_input_tokens or 0) + (u.cache_creation_input_tokens or 0)
         st.session_state.tokens["out"] += u.output_tokens
-        msgs.append({"role": "assistant", "content": [b.model_dump(exclude_none=True) for b in resp.content]})
+        msgs.append({"role": "assistant", "content": [as_input_block(b) for b in resp.content if b.type in ("text", "tool_use")]})
         step_text = "".join(b.text for b in resp.content if b.type == "text").strip()
         # Dana sometimes repeats her whole message after a tool call; keep only new text.
         repeated = any(step_text in p or difflib.SequenceMatcher(None, step_text, p).ratio() > 0.8
@@ -536,7 +553,7 @@ if not st.session_state.chat:
         st.session_state.api_messages = []
         save_conversation()
         st.error("Dana can't be reached right now. Wait a minute and reload the page. "
-                 f"(Details for your instructor: {e.__class__.__name__})")
+                 f"(Details for your instructor: {api_error_detail(e)})")
         st.stop()
 
 if st.session_state.pop("checkin_failed", False):
@@ -579,7 +596,7 @@ if prompt or wrap_up:
         st.session_state.chat.pop()
         del st.session_state.api_messages[before:]  # drop the message and any half-finished tool rounds
         st.error("Your message didn't go through. Wait a moment and send it again. "
-                 f"(Details for your instructor: {e.__class__.__name__})")
+                 f"(Details for your instructor: {api_error_detail(e)})")
         st.stop()
     if wrap_up:
         st.session_state.wrap_stage = 1          # Dana has asked the reflection question
