@@ -480,11 +480,11 @@ with st.sidebar:
         for m in st.session_state.chat)
     st.download_button("Download transcript", transcript,
                        f"transcript_{st.session_state.student}_{st.session_state.student_number}_{datetime.now():%Y%m%d}.txt",
-                       use_container_width=True)
-    if st.button("Finish for today", type="primary", use_container_width=True,
+                       width="stretch")
+    if st.button("Finish for today", type="primary", width="stretch",
                  disabled=not st.session_state.chat):
         st.session_state.wrap_up = True
-    if st.button("Start over", use_container_width=True):
+    if st.button("Start over", width="stretch"):
         reset()
         st.rerun()
     st.caption("Click Finish for today and answer Dana's last question, then download your transcript "
@@ -495,7 +495,7 @@ with st.sidebar:
 
     with st.expander("Lost Dana's file?"):
         st.download_button("Download the full dataset", to_xlsx(DF), "ED_Visits_2025.xlsx", XLSX_MIME,
-                           use_container_width=True)
+                           width="stretch")
 
 # ---------------------------------------------------------------- chat
 st.markdown("#### Dana Morgan")
