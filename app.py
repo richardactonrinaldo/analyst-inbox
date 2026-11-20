@@ -21,6 +21,7 @@ import pandas as pd
 import streamlit as st
 from openpyxl.utils import get_column_letter
 
+SQL_APP = False
 DATA_PATH = Path(__file__).parent / "data" / "ED_Visits_2025.csv"
 MAX_STUDENT_MESSAGES = 60      # per session; caps cost if someone leaves a script running
 MAX_WORKBOOK_CHARS = 20_000    # how much of an uploaded workbook Dana reads
@@ -188,7 +189,26 @@ TOOLS = [
         },
     },
 ]
-TOOL_FUNCS = {"query_data": query_data, "attach_dataset": attach_dataset}
+
+OPEN_REQUEST_TOOL = {
+    "name": "open_request",
+    "description": "Call this every time you send a NEW request (including the first). It shows the analyst a "
+                   "prediction box with your prediction question, and the app won't let them send results for "
+                   "this request until they've answered it.",
+    "input_schema": {"type": "object", "properties": {
+        "title": {"type": "string", "description": "Short name for the request, e.g. 'Barrie top 10 waits'"},
+        "prediction_question": {"type": "string", "description": "The question they answer before starting"}},
+        "required": ["title", "prediction_question"]},
+}
+
+
+def open_request(title: str, prediction_question: str) -> dict:
+    st.session_state.request = {"title": title, "question": prediction_question, "prediction": None}
+    return {"ok": True, "note": "The analyst now sees your prediction question in a box and must answer it "
+                                "before they can send results for this request."}
+
+TOOLS.append(OPEN_REQUEST_TOOL)
+TOOL_FUNCS = {"query_data": query_data, "attach_dataset": attach_dataset, "open_request": open_request}
 
 # ---------------------------------------------------------------- persona
 TOPICS = {
@@ -230,7 +250,7 @@ This module's focus: {TOPICS[topic]}
 How you work:
 - Write like a busy, supportive manager in a work chat: short, plain, friendly. Under 150 words per reply, except a new request may run to 200. No headings. Short bullet lists are fine.
 - Each request gives: why you need it (business context), the specific question(s), who it's for, and when (e.g. "by end of day"). Ask for at most 3 things per request.
-- End every new request with one prediction question to answer BEFORE they start the work, e.g. "Before you run anything: do you expect Barrie's median wait to be above or below its average? Why?" When they answer, don't say whether they're right; just acknowledge it ("Noted, let's see what the data says"). When their results come in, compare them with the prediction and ask what surprised them, if anything.
+- Every new request (including the first) ends with one prediction question to answer BEFORE they start, e.g. "Before you start: do you expect Barrie's median wait to be above or below its average? Why?" Also call open_request with a short title and that question: the app shows them a prediction box and won't accept their results for the request until they've answered it. Their answer arrives as a message starting with "[Prediction]". Don't say whether it's right; just acknowledge it ("Noted, let's see what the data says") and let them get to work. When their results come in, compare them with the prediction and ask what surprised them, if anything.
 - Stay within this module's Excel skills and a beginner's level. "A little harder" means a new question, an extra split or a judgement call using the same functions, never new techniques (no array formulas, MEDIAN(IF()), macros, or features from a later module).
 - If you write your message and then call a tool, don't repeat that message after the tool result. Add only what's new, or nothing.
 - Send data with attach_dataset. Attach the full dataset (filename ED_Visits_2025) with your first request. Later requests may come with a focused extract (one site, one quarter, fewer columns) when that fits. Every attachment goes in the same message as the full request it belongs to: never send a file without saying exactly what to do with it.
@@ -379,7 +399,7 @@ def trim_unfinished(text: str) -> str:
 # student only types the last four digits of their student number. A random link token in the page address also restores
 # the conversation on a plain reload, without putting the student number in the address.
 # Saved conversations are lost only when the app itself restarts (after a long idle sleep or a new deploy).
-SAVED_KEYS = ["student", "student_number", "topic", "api_messages", "chat", "tokens", "wrap_stage"]
+SAVED_KEYS = ["student", "student_number", "topic", "api_messages", "chat", "tokens", "wrap_stage", "request"]
 KEEP_DAYS = 14
 
 
@@ -430,6 +450,7 @@ def restore_conversation(number: str) -> bool:
 
 def reset(topic=None):
     st.session_state.wrap_stage = 0
+    st.session_state.request = None
     st.session_state.api_messages = []
     st.session_state.chat = []  # dicts: who, text, img, files, upload
     st.session_state.tokens = {"in": 0, "out": 0}
@@ -535,6 +556,35 @@ for i, m in enumerate(st.session_state.chat):
             st.download_button(f"📎 {f['name']}", f["data"], f["name"], f["mime"], key=f"dl_{i}_{j}")
 
 
+def prediction_pending() -> bool:
+    req = st.session_state.get("request")
+    return bool(req) and not req.get("prediction")
+
+
+def queue_prediction():
+    text = st.session_state.get("prediction_box", "").strip()
+    if len(text) < 10:
+        st.session_state.prediction_warning = True
+        return
+    st.session_state.request["prediction"] = text
+    st.session_state.pending_prediction = text
+    st.session_state.prediction_box = ""
+
+
+def prediction_box():
+    req = st.session_state.request
+    with st.container(border=True):
+        st.markdown(f"**Before you start:** {req['question']}")
+        st.text_area("Your prediction, and why", key="prediction_box", height=90,
+                     placeholder="I expect ... because ...")
+        if st.session_state.pop("prediction_warning", False):
+            st.warning("Write a sentence or two: what you expect, and why.")
+        st.button("Save my prediction", type="primary", on_click=queue_prediction)
+        st.caption("You can still ask Dana questions in the chat. "
+                   + ("Sending query results unlocks once you've saved your prediction."
+                      if SQL_APP else "Attaching your workbook unlocks once you've saved your prediction."))
+
+
 def post_dana(text: str, files: list):
     st.session_state.chat.append({"who": "Dana", "text": text, "img": None, "files": files, "upload": None})
     save_conversation()
@@ -566,14 +616,24 @@ if sent >= MAX_STUDENT_MESSAGES:
     st.warning("You've reached the message limit for this session. Download your transcript, then press Start over.")
     st.stop()
 
-prompt = st.chat_input("Reply to Dana. Attach your Excel workbook or a chart screenshot.",
-                       accept_file=True, file_type=["xlsx", "png", "jpg", "jpeg"])
+if prediction_pending():
+    prediction_box()
+    prompt = st.chat_input("Ask Dana a question. Save your prediction to unlock attaching your workbook.")
+    prompt = {"text": prompt, "files": []} if prompt else None
+else:
+    prompt = st.chat_input("Reply to Dana. Attach your Excel workbook or a chart screenshot.",
+                           accept_file=True, file_type=["xlsx", "png", "jpg", "jpeg"])
+    prompt = {"text": prompt.text, "files": list(prompt.files)} if prompt else None
 wrap_up = st.session_state.pop("wrap_up", False)
-if prompt or wrap_up:
-    text = (prompt.text or "").strip() if prompt else "I need to stop for today."
+prediction = st.session_state.pop("pending_prediction", None)
+if prompt or wrap_up or prediction:
+    if prediction:
+        text = f"My prediction: {prediction}"
+    else:
+        text = (prompt["text"] or "").strip() if prompt else "I need to stop for today."
     entry = {"who": "You", "text": text, "img": None, "files": [], "upload": None}
     content = []
-    for f in (prompt.files[:1] if prompt else []):
+    for f in (prompt["files"][:1] if prompt else []):
         data, lower = f.getvalue(), f.name.lower()
         if lower.endswith(".xlsx"):
             entry["upload"] = f.name
@@ -585,7 +645,9 @@ if prompt or wrap_up:
                                                         "data": base64.b64encode(data).decode()}})
     if not text:
         text = entry["text"] = "(See attached.)"
-    content.append({"type": "text", "text": f"[Clicked Finish for today] {text}" if wrap_up else text})
+    api_text = (f"[Prediction] {prediction}" if prediction
+                else f"[Clicked Finish for today] {text}" if wrap_up else text)
+    content.append({"type": "text", "text": api_text})
     st.session_state.chat.append(entry)
     answering_reflection = st.session_state.get("wrap_stage", 0) == 1 and not wrap_up
     before = len(st.session_state.api_messages)
