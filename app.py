@@ -140,14 +140,24 @@ def read_workbook(data: bytes, filename: str) -> str:
             for c in row:
                 if c.value is None:
                     continue
-                is_formula = isinstance(c.value, str) and c.value.startswith("=")
+                val = c.value
+                # Dynamic-array formulas (FILTER, UNIQUE, SORT...) load as ArrayFormula objects.
+                if hasattr(val, "text"):
+                    val = val.text or ""
+                    if not val.startswith("="):
+                        val = "=" + val
+                if isinstance(val, str):
+                    # Strip Excel's internal prefixes so Dana sees =STDEV.S(FILTER(...)), not _xlfn._xlws.
+                    val = val.replace("_xlfn._xlws.", "").replace("_xlfn.", "").replace("_xlws.", "")
+                c_value = val
+                is_formula = isinstance(val, str) and val.startswith("=")
                 if big and not is_formula:
                     continue
                 if is_formula:
                     result = ws_v[c.coordinate].value
-                    out.append(f"{c.coordinate}: {c.value}  -> {result if result is not None else '(not calculated)'}")
+                    out.append(f"{c.coordinate}: {c_value}  -> {result if result is not None else '(not calculated)'}")
                 else:
-                    out.append(f"{c.coordinate}: {c.value}")
+                    out.append(f"{c.coordinate}: {c_value}")
         text = "\n".join(out)
         if len(text) > MAX_WORKBOOK_CHARS:
             return text[:MAX_WORKBOOK_CHARS] + "\n[Workbook truncated: too large to show in full.]"
