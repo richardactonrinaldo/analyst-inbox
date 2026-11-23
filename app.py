@@ -13,6 +13,7 @@ import re
 import secrets
 import time
 from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 import anthropic
@@ -110,6 +111,12 @@ def attach_dataset(filename: str, filters: list | None = None, columns: list | N
     return {"attached": f"{name}.xlsx", "rows": int(len(df)), "columns": list(df.columns)}
 
 
+def fmt_result(r) -> str:
+    if r is None:
+        return "(blank, or not calculated)"
+    return "(blank)" if r == "" else str(r)
+
+
 def read_workbook(data: bytes, filename: str) -> str:
     """Turn a student's workbook into text Dana can review: values, and formulas with their results."""
     try:
@@ -117,7 +124,8 @@ def read_workbook(data: bytes, filename: str) -> str:
         wb_v = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
     except Exception:
         return f"[The analyst attached {filename}, but it couldn't be opened. Ask them to re-save it as .xlsx.]"
-    out = [f"[The analyst attached the workbook {filename}. Sheets: {', '.join(wb_f.sheetnames)}.]"]
+    out = [f"[The analyst attached the workbook {filename}. Sheets: {', '.join(wb_f.sheetnames)}. "
+           "Cells show their number format in [format ...] when it isn't General.]"]
     for ws_f in wb_f.worksheets:
         ws_v = wb_v[ws_f.title]
         rows, cols = ws_f.max_row, ws_f.max_column
@@ -135,7 +143,10 @@ def read_workbook(data: bytes, filename: str) -> str:
         big = (not has_pivot and rows > 60
                and len(set(header) & set(DF.columns)) >= min(5, len(header)) and len(header) >= 3)
         if big:
-            out.append(f"Raw data sheet. Header row: {', '.join(header)}. Showing only formula cells:")
+            out.append(f"Raw data sheet ({rows - 1} data rows). Header row: {', '.join(header)}. "
+                       "Raw values aren't shown. Formula columns are summarised: the first few formulas, "
+                       "then a summary of every result in that column.")
+        by_col = {}
         for row in ws_f.iter_rows():
             for c in row:
                 if c.value is None:
@@ -149,15 +160,42 @@ def read_workbook(data: bytes, filename: str) -> str:
                 if isinstance(val, str):
                     # Strip Excel's internal prefixes so Dana sees =STDEV.S(FILTER(...)), not _xlfn._xlws.
                     val = val.replace("_xlfn._xlws.", "").replace("_xlfn.", "").replace("_xlws.", "")
-                c_value = val
                 is_formula = isinstance(val, str) and val.startswith("=")
-                if big and not is_formula:
+                result = ws_v[c.coordinate].value if is_formula else None
+                if big:
+                    if is_formula:
+                        by_col.setdefault(c.column_letter, []).append((c.coordinate, val, result))
                     continue
+                fmt = "" if c.number_format in ("General", None) else f"  [format {c.number_format}]"
                 if is_formula:
-                    result = ws_v[c.coordinate].value
-                    out.append(f"{c.coordinate}: {c_value}  -> {result if result is not None else '(not calculated)'}")
+                    out.append(f"{c.coordinate}: {val}  -> {fmt_result(result)}{fmt}")
                 else:
-                    out.append(f"{c.coordinate}: {c_value}")
+                    out.append(f"{c.coordinate}: {val}{fmt}")
+        for letter, cells in by_col.items():
+            head = ws_f[f"{letter}1"].value
+            out.append(f"Column {letter}" + (f" ('{head}')" if head is not None else "") + f": {len(cells)} formula cells")
+            for coord, f_, r in cells[:3]:
+                nf = ws_f[coord].number_format
+                out.append(f"  {coord}: {f_}  -> {fmt_result(r)}" + ("" if nf == "General" else f"  [format {nf}]"))
+            if len(cells) > 3:
+                res = [r for _, _, r in cells]
+                nums = [r for r in res if isinstance(r, (int, float)) and not isinstance(r, bool)]
+                texts = {}
+                for r in res:
+                    if isinstance(r, str) or r is None:
+                        key = "(empty)" if r in (None, "") else r
+                        texts[key] = texts.get(key, 0) + 1
+                summary = f"  All {len(res)} results: {len(nums)} numbers"
+                if nums:
+                    summary += (f" (sum {round(sum(nums), 4)}, mean {round(sum(nums) / len(nums), 4)}, "
+                                f"min {min(nums)}, max {max(nums)})")
+                if texts:
+                    top = sorted(texts.items(), key=lambda kv: -kv[1])[:8]
+                    summary += "; text/empty results: " + ", ".join(f"{k!s} x{v}" for k, v in top)
+                patterns = {re.sub(r"(?<![A-Za-z])([A-Z]{1,3})\$?\d+", r"\1#", f_) for _, f_, _ in cells}
+                if len(patterns) > 1:
+                    summary += f"; {len(patterns)} different formula patterns in this column"
+                out.append(summary)
         text = "\n".join(out)
         if len(text) > MAX_WORKBOOK_CHARS:
             return text[:MAX_WORKBOOK_CHARS] + "\n[Workbook truncated: too large to show in full.]"
@@ -218,7 +256,100 @@ def open_request(title: str, prediction_question: str) -> dict:
                                 "before they can send results for this request."}
 
 TOOLS.append(OPEN_REQUEST_TOOL)
-TOOL_FUNCS = {"query_data": query_data, "attach_dataset": attach_dataset, "open_request": open_request}
+
+# ---------------------------------------------------------------- calculator (exact arithmetic for Dana)
+import ast
+import math
+import operator
+
+def excel_round(x, digits=0):
+    """ROUND the way Excel does it (halves away from zero), not Python's banker's rounding."""
+    q = Decimal(1).scaleb(-int(digits))
+    return float(Decimal(repr(float(x))).quantize(q, rounding=ROUND_HALF_UP))
+
+
+_BIN = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
+        ast.Pow: operator.pow, ast.Mod: operator.mod}
+_UN = {ast.USub: operator.neg, ast.UAdd: operator.pos}
+
+
+def _eval(node, row):
+    if isinstance(node, ast.Expression):
+        return _eval(node.body, row)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.BinOp) and type(node.op) in _BIN:
+        a, b = _eval(node.left, row), _eval(node.right, row)
+        if a is None or b is None:
+            return None
+        return _BIN[type(node.op)](a, b)
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _UN:
+        v = _eval(node.operand, row)
+        return None if v is None else _UN[type(node.op)](v)
+    if isinstance(node, ast.Name):
+        if row is None or node.id not in row:
+            raise ValueError(f"Unknown name {node.id}" + (f". Columns: {', '.join(row)}" if row else ""))
+        v = row[node.id]
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return None
+        if not isinstance(v, (int, float)):
+            raise ValueError(f"Column {node.id} isn't numeric")
+        return float(v)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
+        args = [_eval(a, row) for a in node.args]
+        if any(a is None for a in args):
+            return None
+        fn = {"round": excel_round, "abs": abs, "min": min, "max": max, "int": math.floor, "sqrt": math.sqrt}.get(node.func.id)
+        if fn is None:
+            raise ValueError(f"Function {node.func.id} isn't available. Use round, abs, min, max, int, sqrt.")
+        return fn(*args)
+    raise ValueError("Only numbers, column names, + - * / ** %, parentheses and round/abs/min/max/int/sqrt are allowed.")
+
+
+def calculate(expression: str, per_row: bool = False, filters: list | None = None) -> dict:
+    """Exact arithmetic. Without per_row: one expression. With per_row: the expression for every row of
+    ED_Visits_2025 (column names as variables), plus the total, average, min and max of the results."""
+    tree = ast.parse(expression.replace("^", "**"), mode="eval")
+    if not per_row:
+        v = _eval(tree, None)
+        return {"result": round(v, 6)}
+    df = apply_filters(DF, filters)
+    id_col = df.columns[0]
+    vals = []
+    for rec in df.to_dict("records"):
+        v = _eval(tree, rec)
+        vals.append((rec[id_col], None if v is None else round(v, 6)))
+    nums = [v for _, v in vals if v is not None]
+    out = {"rows_matched": len(vals), "blank_results": len(vals) - len(nums)}
+    if nums:
+        out.update({"sum": round(sum(nums), 6), "mean": round(sum(nums) / len(nums), 6),
+                    "min": min(nums), "max": max(nums)})
+    if len(vals) <= 60:
+        out["per_row"] = [{id_col: k, "result": v} for k, v in vals]
+    return out
+
+
+CALC_TOOL = {
+    "name": "calculate",
+    "description": "Exact arithmetic, so you never do maths in your head. Without per_row: evaluate one "
+                   "expression, e.g. '(80.8 - 74.5) / 74.5 * 100' or 'round(26/300*100, 1)'. With per_row=true: "
+                   "evaluate the expression on every row of ED_Visits_2025, using column names as variables "
+                   "(e.g. 'CostCAD / LengthOfStayHrs'), and get the per-row results (up to 60 rows) plus their sum, "
+                   "mean, min and max. Filters work as in query_data. round() rounds like Excel's ROUND.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "expression": {"type": "string"},
+            "per_row": {"type": "boolean"},
+            "filters": TOOLS[0]["input_schema"]["properties"]["filters"],
+        },
+        "required": ["expression"],
+    },
+}
+
+TOOLS.append(CALC_TOOL)
+TOOL_FUNCS = {"query_data": query_data, "attach_dataset": attach_dataset, "open_request": open_request,
+              "calculate": calculate}
 
 # ---------------------------------------------------------------- persona
 TOPICS = {
@@ -258,22 +389,23 @@ def system_prompt(topic: str, student: str) -> str:
 This module's focus: {TOPICS[topic]}
 
 How you work:
-- Write like a busy, supportive manager in a work chat: short, plain, friendly. Under 150 words per reply, except a new request may run to 200. No headings. Short bullet lists are fine.
+- Write like a warm, supportive manager in a work chat: plain, friendly and encouraging, never curt. Under 180 words per reply, except a new request may run to 220. No headings. Short bullet lists are fine.
+- Sound like a person who enjoys mentoring. Open with a genuine, specific reaction to what they did ("Nice, locking the rate with $A$14 is exactly right"), not a verdict word. When something is wrong, say what IS working first, then the issue, in a kind tone ("Close! ..." rather than "Not quite."). When you explain, add a short why, a sentence that connects it to real work ("Finance will reconcile this against the vendor's invoice, so cents matter"). Vary your wording; don't reuse the same stock phrases.
 - Each request gives: why you need it (business context), the specific question(s), who it's for, and when (e.g. "by end of day"). Ask for at most 3 things per request.
-- Every new request (including the first) ends with one prediction question to answer BEFORE they start, e.g. "Before you start: do you expect Barrie's median wait to be above or below its average? Why?" Also call open_request with a short title and that question: the app shows them a prediction box and won't accept their results for the request until they've answered it. Their answer arrives as a message starting with "[Prediction]". Don't say whether it's right; just acknowledge it ("Noted, let's see what the data says") and let them get to work. When their results come in, compare them with the prediction and ask what surprised them, if anything.
+- Every new request (including the first) ends with one prediction question to answer BEFORE they start, e.g. "Before you start: do you expect Barrie's median wait to be above or below its average? Why?" Also call open_request with a short title and that question: the app shows them a prediction box and won't accept their results for the request until they've answered it. Their answer arrives as a message starting with "[Prediction]". Don't say whether it's right; acknowledge it briefly and naturally in your own words (vary it each time; for an "I don't know", encourage a best guess next time), and let them get to work. When their results come in, compare them with the prediction and ask what surprised them, if anything.
 - Stay within this module's Excel skills and a beginner's level. "A little harder" means a new question, an extra split or a judgement call using the same functions, never new techniques (no array formulas, MEDIAN(IF()), macros, or features from a later module).
 - If you write your message and then call a tool, don't repeat that message after the tool result. Add only what's new, or nothing.
 - Send data with attach_dataset. Attach the full dataset (filename ED_Visits_2025) with your first request. Later requests may come with a focused extract (one site, one quarter, fewer columns) when that fits. Every attachment goes in the same message as the full request it belongs to: never send a file without saying exactly what to do with it.
 - One thing at a time. Don't stack a new request on top of an unfinished one. When you ask a follow-up question, wait for the answer, respond to it, and only then send the next request.
 - Now and then leave one detail a little vague so the analyst has to ask a clarifying question. Answer clarifying questions the way a real manager would.
 - Numbers count only when they come in the analyst's uploaded Excel workbook (Modules A-C). If they type results without attaching the workbook, ask for the workbook before you confirm anything; you can still answer questions and clarify in the meantime. In the workbook, each result should be a formula (shown as "B4: =AVERAGE(...) -> 80.8"). A result typed in as a plain number ("B4: 80.8") doesn't count: ask them to replace it with the formula that produces it. PivotTable values are fine as they are. In Module D, summaries can be typed, but check every number in them.
-- Before you comment on ANY number the analyst reports, check it with the query_data tool. Never guess. If they attached their workbook, review their formulas and results the same way and refer to specific cells (e.g. "your formula in B4"). Only call a cell right or wrong if you can actually see it. Remember an extract you sent has fewer rows than the full dataset, so check against the same filters.
+- Before you comment on ANY number the analyst reports, check it with the query_data tool, or with calculate for any arithmetic query_data can't do (a difference, a percent change, a rate). Never do arithmetic in your head and never guess. If they attached their workbook, review their formulas and results the same way and refer to specific cells (e.g. "your formula in B4"). Only call a cell right or wrong if you can actually see it. Remember an extract you sent has fewer rows than the full dataset, so check against the same filters.
 - If a number is right, say so specifically. If it is off, say which figure doesn't match what you're seeing and give a hint (which function, range, filter or step to recheck). Don't reveal the correct value until they've missed it twice; then show it and explain briefly.
 - The same goes for interpretation. If their takeaway is wrong, point them back at their own numbers with a guiding question ("compare B10 and B11: which group waits longer?") before you explain the right reading. Explain it only after a second miss.
 - Occasionally (about every second or third request, and always when a result looks copied rather than built, e.g. correct numbers with formulas they don't seem to understand), once their results are right, run a quick check that they understand their own work: ask them to explain one of their formulas in their own words ("walk me through B5"), or to predict a small change ("if you switched B5 to Orillia, would it go up or down, and roughly to what?"). Check any number they give with query_data. Pick a different cell or change each time.
 - Then ask one realistic follow-up a manager would ask: what explains it, why it matters, what we should do, or who else should see it. 
 - Ask at most two questions per message. When you ask two, number them (1. and 2.) so neither gets lost. Never more than two.
-- If the analyst answers only one of your questions, acknowledge what they answered, then come back to the one they missed ("Thanks, that covers my first question. What about the second: ...?"). Don't move on until both are answered.
+- If the analyst answers only one of your questions, acknowledge what they answered, then come back to the one they missed once, gently ("Thanks, that covers the first one. When you get a sec, what about ...?"). If it's still unanswered after that one reminder, don't ask a third time: give a short hint or the answer with a one-line explanation, and move on. Never sound like you're chasing them.
 - A message that starts with "[Clicked Finish for today]" means they clicked the "Finish for today" button. Don't sign off yet: ask one reflection question (what tripped them up today, and how did they work through it?). After they answer, respond in a sentence or two and sign off warmly. Your end-of-day check-in follows automatically, so never ask them to click the button. If any of your questions were left unanswered, just note you'll pick them up next time.
 - Only if they say goodbye in their own words, without that marker, reply briefly and ask them to click "Finish for today" so you can wrap up with a reflection question and their check-in.
 - Don't do the analysis for them. Show an example formula only if they're stuck after a hint.
@@ -626,7 +758,10 @@ if sent >= MAX_STUDENT_MESSAGES:
     st.warning("You've reached the message limit for this session. Download your transcript, then press Start over.")
     st.stop()
 
-if prediction_pending():
+if st.session_state.get("wrap_stage", 0) == 1:
+    prompt = st.chat_input("Answer Dana's reflection question.")
+    prompt = {"text": prompt, "files": []} if prompt else None
+elif prediction_pending():
     prediction_box()
     prompt = st.chat_input("Ask Dana a question. Save your prediction to unlock attaching your workbook.")
     prompt = {"text": prompt, "files": []} if prompt else None
