@@ -13,6 +13,7 @@ import re
 import secrets
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
@@ -561,7 +562,39 @@ def clean_number(raw: str) -> str:
     return re.sub(r"\s+", "", raw or "")
 
 
+LOCAL_TZ = ZoneInfo("America/Toronto")
+
+
+def local_now() -> datetime:
+    return datetime.now(LOCAL_TZ)
+
+
+def transcript_header() -> str:
+    """Name, module and session times for the top of the transcript."""
+    times = [datetime.fromisoformat(m["at"]) for m in st.session_state.chat if m.get("at")]
+    lines = [f"Student: {st.session_state.student} (student number ending {st.session_state.student_number})",
+             f"Module: {st.session_state.topic}"]
+    if times:
+        start, end = min(times), max(times)
+        mins = int((end - start).total_seconds() // 60)
+        lines += [f"Session started: {start:%a %Y-%m-%d %H:%M} (Eastern time)",
+                  f"Last message: {end:%a %Y-%m-%d %H:%M} ({mins // 60} h {mins % 60} min after the start)"]
+    lines.append(f"Transcript downloaded: {local_now():%a %Y-%m-%d %H:%M}")
+    return "\n".join(lines) + "\n\n"
+
+
+def stamp(m: dict) -> str:
+    """[09:21] before each message, with the date added if the session ran past midnight."""
+    if not m.get("at"):
+        return ""
+    t = datetime.fromisoformat(m["at"])
+    first = next((datetime.fromisoformat(x["at"]) for x in st.session_state.chat if x.get("at")), t)
+    return f"[{t:%H:%M}] " if t.date() == first.date() else f"[{t:%a %b %d %H:%M}] "
+
+
 def save_conversation():
+    for m in st.session_state.get("chat") or []:
+        m.setdefault("at", local_now().isoformat())
     number = st.session_state.get("student_number")
     if not number:
         return
@@ -673,9 +706,8 @@ with st.sidebar:
         st.rerun()
 
     st.subheader("Conversation")
-    transcript = (f"Student: {st.session_state.student} (student number ending {st.session_state.student_number})\n"
-                  f"Module: {st.session_state.topic}\n\n") + "\n\n".join(
-        f"{'Dana Morgan' if m['who'] == 'Dana' else st.session_state.student}: {m['text']}"
+    transcript = transcript_header() + "\n\n".join(
+        f"{stamp(m)}{'Dana Morgan' if m['who'] == 'Dana' else st.session_state.student}: {m['text']}"
         + "".join(f"\n[Attachment: {f['name']}]" for f in m["files"])
         + (f"\n[Attachment: {m['upload']}]" if m["upload"] else "")
         + ("\n[Attachment: chart screenshot]" if m["img"] else "")
@@ -822,7 +854,7 @@ if prompt or wrap_up or prediction:
         text = f"My prediction: {prediction}"
     else:
         text = (prompt["text"] or "").strip() if prompt else "I need to stop for today."
-    entry = {"who": "You", "text": text, "img": None, "files": [], "upload": None}
+    entry = {"who": "You", "text": text, "img": None, "files": [], "upload": None, "at": local_now().isoformat()}
     content = []
     for f in (prompt["files"][:1] if prompt else []):
         data, lower = f.getvalue(), f.name.lower()
