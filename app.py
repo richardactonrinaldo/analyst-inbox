@@ -369,7 +369,7 @@ TOPICS = {
         "Charts in Excel: column/bar to compare categories, line for trends by Month, pie only for 2-4 parts "
         "of a whole. Ask for one chart for a specific audience. Judge chart choice, title, axis labels, "
         "sorting, and whether an executive gets the point in 5 seconds. Charts can't be seen inside an "
-        "uploaded workbook, so ask for a screenshot of the chart. This module's storyline is demand and patient "
+        "uploaded workbook, so ask for a screenshot of the chart. The analyst can attach the screenshot and the workbook together in one message. This module's storyline is demand and patient "
         "mix: visit volume across the year (a line chart by Month), the mix of chief complaints, the share of "
         "each AgeGroup that is admitted, and length of stay by Disposition. Don't chart wait times by site or "
         "triage (that was Module A)."),
@@ -530,8 +530,8 @@ def write_checkin() -> str:
     """Dana's end-of-day performance-review style feedback, from the whole conversation."""
     convo = "\n\n".join(
         f"{'Dana' if m['who'] == 'Dana' else st.session_state.student}: {m['text']}"
-        + (f" [attached workbook: {m['upload']}]" if m["upload"] else "")
-        + (" [attached chart screenshot]" if m["img"] else "")
+        + "".join(f" [attached workbook: {u}]" for u in att_uploads(m))
+        + "".join(" [attached screenshot]" for _ in att_imgs(m))
         for m in st.session_state.chat if not m.get("checkin"))
     module = st.session_state.topic.split(" · ")[0]
     prompt = CHECKIN_PROMPT.format(student=st.session_state.student, topic=TOPICS[st.session_state.topic],
@@ -572,6 +572,19 @@ def norm_code(raw: str) -> str:
 
 def clean_number(raw: str) -> str:
     return re.sub(r"\s+", "", raw or "")
+
+
+MAX_ATTACHMENTS = 4
+
+
+def att_imgs(m: dict) -> list:
+    """Screenshots on a message (older saved messages hold one under 'img')."""
+    return m.get("imgs") or ([m["img"]] if m.get("img") else [])
+
+
+def att_uploads(m: dict) -> list:
+    """Workbook names on a message (older saved messages hold one under 'upload')."""
+    return m.get("uploads") or ([m["upload"]] if m.get("upload") else [])
 
 
 LOCAL_TZ = ZoneInfo("America/Toronto")
@@ -721,8 +734,8 @@ with st.sidebar:
     transcript = transcript_header() + "\n\n".join(
         f"{stamp(m)}{'Dana Morgan' if m['who'] == 'Dana' else st.session_state.student}: {m['text']}"
         + "".join(f"\n[Attachment: {f['name']}]" for f in m["files"])
-        + (f"\n[Attachment: {m['upload']}]" if m["upload"] else "")
-        + ("\n[Attachment: chart screenshot]" if m["img"] else "")
+        + "".join(f"\n[Attachment: {u}]" for u in att_uploads(m))
+        + "".join("\n[Attachment: screenshot]" for _ in att_imgs(m))
         for m in st.session_state.chat)
     transcript_name = f"transcript_{st.session_state.student}_{st.session_state.student_number}_{datetime.now():%Y%m%d}.txt"
     st.download_button("Download transcript", transcript, transcript_name, width="stretch")
@@ -762,10 +775,10 @@ for i, m in enumerate(st.session_state.chat):
                 st.markdown(m["text"])
         else:
             st.markdown(m["text"])
-        if m["img"]:
-            st.image(m["img"])
-        if m["upload"]:
-            st.caption(f"📎 {m['upload']}")
+        for img in att_imgs(m):
+            st.image(img)
+        for u in att_uploads(m):
+            st.caption(f"📎 {u}")
         for j, f in enumerate(m["files"]):
             st.download_button(f"📎 {f['name']}", f["data"], f["name"], f["mime"], key=f"dl_{i}_{j}")
 
@@ -856,8 +869,8 @@ elif prediction_pending():
     prompt = st.chat_input("Ask Dana a question. Save your prediction to unlock attaching your workbook.")
     prompt = {"text": prompt, "files": []} if prompt else None
 else:
-    prompt = st.chat_input("Reply to Dana. Attach your Excel workbook or a chart screenshot.",
-                           accept_file=True, file_type=["xlsx", "png", "jpg", "jpeg"])
+    prompt = st.chat_input("Reply to Dana. Attach your workbook and/or screenshots (up to 4 files).",
+                           accept_file="multiple", file_type=["xlsx", "png", "jpg", "jpeg"])
     prompt = {"text": prompt.text, "files": list(prompt.files)} if prompt else None
 wrap_up = st.session_state.pop("wrap_up", False)
 prediction = st.session_state.pop("pending_prediction", None)
@@ -866,15 +879,19 @@ if prompt or wrap_up or prediction:
         text = f"My prediction: {prediction}"
     else:
         text = (prompt["text"] or "").strip() if prompt else "I need to stop for today."
-    entry = {"who": "You", "text": text, "img": None, "files": [], "upload": None, "at": local_now().isoformat()}
+    entry = {"who": "You", "text": text, "img": None, "files": [], "upload": None, "imgs": [], "uploads": [],
+             "at": local_now().isoformat()}
     content = []
-    for f in (prompt["files"][:1] if prompt else []):
+    attached = prompt["files"] if prompt else []
+    if len(attached) > MAX_ATTACHMENTS:
+        st.warning(f"Only the first {MAX_ATTACHMENTS} files were sent.")
+    for f in attached[:MAX_ATTACHMENTS]:
         data, lower = f.getvalue(), f.name.lower()
         if lower.endswith(".xlsx"):
-            entry["upload"] = f.name
+            entry["uploads"].append(f.name)
             content.append({"type": "text", "text": read_workbook(data, f.name)})
         else:
-            entry["img"] = data
+            entry["imgs"].append(data)
             media = "image/png" if lower.endswith(".png") else "image/jpeg"
             content.append({"type": "image", "source": {"type": "base64", "media_type": media,
                                                         "data": base64.b64encode(data).decode()}})
@@ -888,7 +905,7 @@ if prompt or wrap_up or prediction:
     before = len(st.session_state.api_messages)
     st.session_state.api_messages.append({"role": "user", "content": content})
     try:
-        with st.spinner("Dana is reviewing…" if entry["upload"] or entry["img"] else "Dana is typing…"):
+        with st.spinner("Dana is reviewing…" if entry["uploads"] or entry["imgs"] else "Dana is typing…"):
             reply, files = ask_dana()
         post_dana(reply, files)
     except anthropic.APIError as e:
