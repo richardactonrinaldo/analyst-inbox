@@ -84,8 +84,8 @@ th{background:var(--dana)}
   <div class="sub">Open transcripts downloaded from the Excel or SQL Analyst Inbox and get a readable page with tutor notes.</div>
   <div class="drop" id="drop">
     <label class="btn" for="pick">Choose transcript(s)</label>
-    <input id="pick" type="file" accept=".txt,text/plain" multiple hidden>
-    <p>Or drop .txt files here. On an iPhone, pick them from Files.</p>
+    <input id="pick" type="file" accept=".html,.htm,.txt,text/html,text/plain" multiple hidden>
+    <p>Or drop transcript files (.html or .txt) here. On an iPhone, pick them from Files.</p>
   </div>
   <p class="privacy">Transcripts are read on this device only. Nothing is uploaded or saved.</p>
   <div id="files" class="files"></div>
@@ -361,11 +361,19 @@ function show(i) {
   out.scrollIntoView({behavior: "smooth", block: "start"});
 }
 async function load(fileList) {
-  const files = [...fileList].filter(f => /\.txt$/i.test(f.name) || f.type === "text/plain");
-  if (!files.length) { out.innerHTML = '<p class="empty">Choose one or more transcript .txt files.</p>'; return; }
+  const files = [...fileList].filter(f => /\.(txt|html?)$/i.test(f.name) || /^text\/(plain|html)$/.test(f.type));
+  if (!files.length) { out.innerHTML = '<p class="empty">Choose one or more transcript files (.html or .txt).</p>'; return; }
   loaded = [];
   for (const f of files) {
-    try { const tr = parse(f.name, await f.text()); tr.i = loaded.length; loaded.push(tr); }
+    try {
+      let raw = await f.text();
+      if (/\.html?$/i.test(f.name) || /^\s*<!DOCTYPE html/i.test(raw)) {
+        const m = raw.match(/<script[^>]*id="analyst-inbox-transcript"[^>]*>([\s\S]*?)<\/script>/);
+        if (!m) throw new Error("not a transcript");
+        raw = JSON.parse(m[1]);
+      }
+      const tr = parse(f.name, raw); tr.i = loaded.length; loaded.push(tr);
+    }
     catch (err) { out.insertAdjacentHTML("beforeend", `<p class="empty">Couldn't read ${esc(f.name)}.</p>`); }
   }
   loaded.sort((a, b) => (a.started || 0) - (b.started || 0)).forEach((t, k) => t.i = k);

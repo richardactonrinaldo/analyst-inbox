@@ -18,6 +18,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 import anthropic
+
+from transcript_html import embedded_text, to_html as transcript_to_html
 import openpyxl
 import pandas as pd
 import streamlit as st
@@ -669,7 +671,7 @@ MAX_RESUME_CHARS = 60_000
 
 def start_resume(raw: bytes, name: str):
     """Start a fresh conversation that continues from a downloaded transcript."""
-    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").strip()
+    text = embedded_text(raw.decode("utf-8", errors="replace")).replace("\r\n", "\n").strip()
     m = re.search(r"^Module: (.+)$", text, re.M)
     topic = m.group(1).strip() if m and m.group(1).strip() in TOPICS else None
     if len(text) > MAX_RESUME_CHARS:
@@ -694,7 +696,7 @@ if "student" not in st.session_state:
         name = st.text_input("First name (first visit only)")
         code = st.text_input("Class code (first visit only)", type="password")
         resume_file = st.file_uploader("Continuing from an earlier session? Upload the transcript you "
-                                       "downloaded last time (optional).", type=["txt"])
+                                       "downloaded last time (optional).", type=["html", "htm", "txt"])
         if st.form_submit_button("Open my inbox", type="primary"):
             number = clean_number(number)
             saved = conversation_store()["by_number"].get(number)
@@ -739,8 +741,10 @@ with st.sidebar:
         + "".join(f"\n[Attachment: {u}]" for u in att_uploads(m))
         + "".join("\n[Attachment: screenshot]" for _ in att_imgs(m))
         for m in st.session_state.chat)
-    transcript_name = f"transcript_{st.session_state.student}_{st.session_state.student_number}_{datetime.now():%Y%m%d}.txt"
-    st.download_button("Download transcript", transcript, transcript_name, width="stretch")
+    transcript_name = f"transcript_{st.session_state.student}_{st.session_state.student_number}_{datetime.now():%Y%m%d}.html"
+    transcript_page = transcript_to_html(
+        transcript, f"Analyst Inbox transcript: {st.session_state.student}, {local_now():%d %b %Y}")
+    st.download_button("Download transcript", transcript_page, transcript_name, "text/html", width="stretch")
     if st.button("Finish for today", type="primary", width="stretch",
                  disabled=(not st.session_state.chat or st.session_state.get("wrap_stage", 0) == 1
                            or st.session_state.chat[-1].get("checkin", False))):
@@ -748,7 +752,7 @@ with st.sidebar:
     with st.expander("Continue from a transcript"):
         st.caption("Lost your conversation? Upload the transcript you downloaded and Dana will pick up "
                    "where you left off. This replaces the current conversation.")
-        tfile = st.file_uploader("Transcript (.txt)", type=["txt"], key="resume_upload",
+        tfile = st.file_uploader("Transcript file", type=["html", "htm", "txt"], key="resume_upload",
                                  label_visibility="collapsed")
         if st.button("Continue from this transcript", disabled=tfile is None, width="stretch"):
             start_resume(tfile.getvalue(), tfile.name)
@@ -872,7 +876,7 @@ if st.session_state.get("end_reminder") and st.session_state.chat and st.session
     st.success("**Before you go, download your transcript.** It's your record of today's work. "
                "If your conversation is gone next time, upload it when you sign in and Dana will pick up "
                "where you left off.")
-    st.download_button("Download transcript", transcript, transcript_name, type="primary",
+    st.download_button("Download transcript", transcript_page, transcript_name, "text/html", type="primary",
                        key="end_of_session_transcript",
                        on_click=lambda: st.session_state.update(end_reminder=False))
 

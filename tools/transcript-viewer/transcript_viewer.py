@@ -1,6 +1,6 @@
 """Analyst Inbox transcript viewer.
 
-Turns transcripts downloaded from the Analyst Inbox apps (Excel and SQL) into a readable web page,
+Turns transcripts downloaded from the Analyst Inbox apps (Excel and SQL; .html or older .txt) into a readable web page,
 with tutor notes at the top: requests, predictions, possible stumbling points, questions Dana had to
 repeat, long pauses, the student's reflection and Dana's end-of-day check-in.
 
@@ -17,6 +17,7 @@ Needs only Python 3.9 or later (python.org). Nothing else to install.
 from __future__ import annotations
 
 import html
+import json
 import re
 import sys
 import webbrowser
@@ -86,8 +87,22 @@ def parse_time(stamp: str, base: datetime | None, prev: datetime | None) -> date
     return None
 
 
+EMBED = re.compile(r'<script[^>]*id="analyst-inbox-transcript"[^>]*>(.*?)</script>', re.S)
+
+
+def read_transcript(path: Path) -> str:
+    """Plain transcript text from a .txt file, or from the copy embedded in a student's .html transcript."""
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    if path.suffix.lower() in (".html", ".htm"):
+        m = EMBED.search(raw)
+        if not m:
+            raise ValueError("this HTML file isn't an Analyst Inbox transcript")
+        raw = json.loads(m.group(1))
+    return raw
+
+
 def parse(path: Path) -> Transcript:
-    raw = path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+    raw = read_transcript(path).replace("\r\n", "\n")
     tr = Transcript(path=path, app="SQL" if "_SQL_" in path.name or "transcript_SQL" in path.name else "Excel")
     lines = raw.split("\n")
 
@@ -570,7 +585,7 @@ def pick_files() -> list[Path]:
     root.withdraw()
     root.attributes("-topmost", True)
     names = filedialog.askopenfilenames(title="Choose Analyst Inbox transcript(s)",
-                                        filetypes=[("Transcripts", "*.txt"), ("All files", "*.*")])
+                                        filetypes=[("Transcripts", "*.html *.htm *.txt"), ("All files", "*.*")])
     root.destroy()
     return [Path(n) for n in names]
 
@@ -586,7 +601,8 @@ def main(argv: list[str]) -> int:
     no_open = "--no-open" in argv
     args = [a for a in argv if a != "--no-open"]
     paths = [Path(a) for a in args] if args else pick_files()
-    paths = [p for p in paths if p.suffix.lower() == ".txt" and p.exists()]
+    paths = [p for p in paths if p.exists() and p.suffix.lower() in (".txt", ".html", ".htm")
+             and not p.stem.endswith("_readable") and p.name != "transcripts_index.html"]
     if not paths:
         print("No transcript files chosen.")
         return 1
