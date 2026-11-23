@@ -1,3 +1,8 @@
 .streamlit/secrets.toml
 __pycache__/
 .venv/
+
+# student transcripts (personal data)
+transcript_*.txt
+*_readable.html
+transcripts_index.html

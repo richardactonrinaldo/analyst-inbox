@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcript Viewer</title>
+<style>
+/* VOICE: calm, clinical, a tutor's working notes.
+   IDEA: a marked-up case file: summary card on top, the conversation underneath with flags in the margin.
+   PICTURE: the student's conversation itself, with flagged moments outlined.
+   COLOUR and TYPE: deep teal ink on white, one warm orange for flags; Source Sans 3.
+   LAYOUT: one column up to 980px; tiles wrap; stacks cleanly on a phone. */
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap');
+:root{color-scheme:light dark;
+  --bg:light-dark(#f7f9fa,#0f1719);--card:light-dark(#fff,#16211f);--ink:light-dark(#1d292e,#e3ecee);
+  --muted:light-dark(#5b6a71,#9db0b5);--line:light-dark(#dbe3e6,#2a3a3d);--accent:light-dark(#0b5563,#6fc3cf);
+  --dana:light-dark(#eef3f5,#1b2a2d);--you:light-dark(#e4f1e8,#1d3026);--pred:light-dark(#fff4d6,#3a3115);
+  --warn:light-dark(#b4501a,#f0a46b);--warnbg:light-dark(#fdeee3,#3b2414);--codebg:#1d292e;--codeink:#e6eef1}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Source Sans 3",-apple-system,"Segoe UI",Arial,sans-serif;overflow-x:clip}
+.wrap{max-width:980px;margin:0 auto;padding:clamp(20px,4vw,40px) max(4vw,14px) 60px}
+h1{font-size:clamp(26px,5vw,36px);line-height:1.1;margin:0 0 6px;color:var(--accent);text-wrap:balance}
+h2{font-size:20px;margin:28px 0 10px;color:var(--accent)}
+h3{font-size:16px;margin:18px 0 6px}
+.sub{color:var(--muted)}
+.drop{margin:20px 0;border:2px dashed var(--line);border-radius:14px;background:var(--card);padding:28px 20px;text-align:center}
+.drop.over{border-color:var(--accent)}
+.btn{font:inherit;font-weight:600;min-height:44px;padding:10px 18px;border-radius:10px;border:1px solid var(--accent);
+  background:var(--accent);color:light-dark(#fff,#0f1719);cursor:pointer}
+.btn.ghost{background:transparent;color:var(--accent)}
+.btn:focus-visible,button:focus-visible{outline:3px solid var(--warn);outline-offset:2px}
+.drop p{margin:10px 0 0;color:var(--muted);font-size:14px}
+.privacy{font-size:14px;color:var(--muted)}
+.files{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+.files button{font:inherit;min-height:44px;padding:6px 14px;border-radius:22px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+.files button.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);font-weight:600}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:16px 0}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.stat b{display:block;font-size:22px;color:var(--accent);white-space:nowrap}
+.stat span{color:var(--muted);font-size:13px}
+.notes{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px}
+.notes ul{margin:6px 0;padding-left:20px}.notes li{margin:5px 0}
+.notes a{color:var(--accent);text-decoration:none}.notes a:hover{text-decoration:underline}
+.time{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.empty{color:var(--muted)}
+.tag{display:inline-block;font-size:13px;padding:1px 9px;border-radius:10px;margin:0 6px 4px 0;background:var(--warnbg);color:var(--warn)}
+.tag.req{background:var(--dana);color:var(--accent)}.tag.pred{background:var(--pred);color:light-dark(#7a5b00,#f2d27a)}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 14px}
+.toolbar button{font:inherit;min-height:44px;padding:6px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+.toolbar button.on{background:var(--accent);border-color:var(--accent);color:light-dark(#fff,#0f1719)}
+.msg{display:flex;margin:10px 0;scroll-margin-top:16px}.msg.student{justify-content:flex-end}
+.bubble{max-width:82%;background:var(--dana);border:1px solid var(--line);border-radius:14px;padding:10px 14px}
+.student .bubble{background:var(--you)}
+.msg.request .bubble{box-shadow:inset 4px 0 0 var(--accent)}
+.msg.prediction .bubble{background:var(--pred)}
+.msg.checkin .bubble{max-width:100%;background:var(--card);border:2px solid var(--accent)}
+.msg.flagged .bubble{border:2px solid var(--warn)}
+.msg.flash .bubble{animation:flash 1.2s ease-out}
+@keyframes flash{from{box-shadow:0 0 0 6px var(--warnbg)}to{box-shadow:none}}
+@media (prefers-reduced-motion:reduce){.msg.flash .bubble{animation:none}}
+.who{font-size:14px;font-weight:600;color:var(--muted);margin-bottom:4px}
+.bubble p{margin:6px 0}.bubble ul,.bubble ol{margin:6px 0;padding-left:22px}
+code{background:light-dark(#e6edf0,#243437);padding:1px 4px;border-radius:4px;font:14px Consolas,Menlo,monospace;overflow-wrap:anywhere}
+pre{background:var(--codebg);color:var(--codeink);padding:10px 12px;border-radius:8px;overflow-x:auto;font:13px/1.45 Consolas,Menlo,monospace;white-space:pre-wrap;margin:6px 0}
+.label{font-size:13px;font-weight:600;color:var(--muted)}
+.result{font-size:14px;color:light-dark(#2e7d4f,#7fd19f);margin:6px 0 4px}.result.error{color:var(--warn);font-weight:600}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;font-size:14px;background:var(--card)}th,td{border:1px solid var(--line);padding:3px 8px;text-align:left;white-space:nowrap}
+th{background:var(--dana)}
+.chip{display:inline-block;font-size:13px;border:1px solid var(--line);border-radius:12px;padding:1px 9px;margin:4px 4px 0 0;color:var(--muted);background:var(--card)}
+.gap{text-align:center;color:var(--warn);font-size:14px;margin:14px 0}
+.hidden{display:none!important}
+.index{width:100%;background:var(--card)}.index td,.index th{white-space:normal;padding:8px 10px}
+.index td.num{text-align:right}
+@media(max-width:600px){.bubble{max-width:94%}.notes{padding:2px 12px 10px}
+  .index thead{display:none}.index tr{display:grid;padding:8px 0;border-bottom:1px solid var(--line)}.index td{border:0;padding:2px 10px}
+  .index td::before{content:attr(data-l) ": ";color:var(--muted)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Analyst Inbox transcript viewer</h1>
+  <div class="sub">Open transcripts downloaded from the Excel or SQL Analyst Inbox and get a readable page with tutor notes.</div>
+  <div class="drop" id="drop">
+    <label class="btn" for="pick">Choose transcript(s)</label>
+    <input id="pick" type="file" accept=".txt,text/plain" multiple hidden>
+    <p>Or drop .txt files here. On an iPhone, pick them from Files.</p>
+  </div>
+  <p class="privacy">Transcripts are read on this device only. Nothing is uploaded or saved.</p>
+  <div id="files" class="files"></div>
+  <div id="out"></div>
+</div>
+<script>
+{
+const LONG_PAUSE_MIN = 15;
+const STUDENT_STUCK = [/\bwhat(?:'s| is) wrong\b/i,/\bhow (?:do|can|would|should) i\b/i,/\bnot (?:really |quite |totally )?sure\b/i,
+  /\bi don'?t know\b/i,/\bi'?m stuck\b/i,/confus/i,/\bhelp\b/i,/\bdoesn'?t work\b/i,/\bcan'?t get\b/i,/\berror\b/i,
+  /\bwhy (?:does|is|did|do)\b/i,/struggl/i,/\btripped me\b/i];
+const DANA_CORRECTS = [/\bnot quite\b/i,/\bclose\b[!,.]/i,/\bdoesn'?t match\b/i,/\bdon'?t match\b/i,/\bisn'?t right\b/i,
+  /\bisn'?t correct\b/i,/\bnot correct\b/i,/\bwon'?t work\b/i,/\bwrong\b/i,/\bmistake\b/i,/\boff by\b/i,/\bhard-coded\b/i,
+  /#DIV\/0/i,/#VALUE/i,/#N\/A/i,/#REF/i,/\bI don'?t see\b/i,/\bonly has\b/i,/\bdouble-?check\b/i,/\bsyntax\b/i,
+  /\bshould (?:read|be)\b/i,/\bmissing\b/i,/\bslipped\b/i];
+const DANA_REPEATS = [/\bstill waiting\b/i,/\bhaven'?t answered\b/i,/\byou haven'?t\b/i,/\basking (?:it )?again\b/i,
+  /\bstill need\b/i,/\bcoming back to\b/i,/\bstill open\b/i,/\bdidn'?t answer\b/i,/\bwhen you get a sec\b/i,
+  /\bwhat about the (?:first|second)\b/i];
+const has = (ps, t) => ps.some(p => p.test(t));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"], MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const pad = n => String(n).padStart(2, "0");
+const tstr = t => t ? `${pad(t.getHours())}:${pad(t.getMinutes())}` : "";
+const duration = (a, b) => {
+  if (!a || !b) return "not recorded";
+  const m = Math.floor((b - a) / 60000);
+  return m >= 60 ? `${Math.floor(m / 60)} h ${pad(m % 60)} min` : `${m} min`;
+};
+
+// ------------------------------------------------------------ parsing
+function parseTime(stamp, base, prev) {
+  stamp = stamp.trim();
+  let m = stamp.match(/^(\d{1,2}):(\d{2})$/);
+  const ref = prev || base || new Date(2000, 0, 1);
+  if (m) {
+    let t = new Date(ref); t.setHours(+m[1], +m[2], 0, 0);
+    if (prev && t < new Date(prev - 60000)) t = new Date(t.getTime() + 86400000);
+    return t;
+  }
+  m = stamp.match(/^\w{3} (\w{3}) (\d{1,2}) (\d{1,2}):(\d{2})$/);
+  if (m && MONTHS.includes(m[1])) return new Date(ref.getFullYear(), MONTHS.indexOf(m[1]), +m[2], +m[3], +m[4]);
+  return null;
+}
+
+function parse(name, raw) {
+  const tr = {name, student: "Student", number: "", module: "", app: /_SQL_|^transcript_SQL/.test(name) ? "SQL" : "Excel",
+              started: null, messages: []};
+  const lines = raw.replace(/\r\n/g, "\n").split("\n");
+  let i = 0;
+  for (; i < lines.length && lines[i].trim(); i++) {
+    const line = lines[i];
+    let m = line.match(/Student:\s*(.+?)\s*\(student number ending\s*(\d+)\)/);
+    if (m) { tr.student = m[1].trim(); tr.number = m[2]; continue; }
+    if (line.startsWith("Module:")) tr.module = line.slice(7).trim();
+    m = line.match(/^Session started:.*?(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/);
+    if (m) tr.started = new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]);
+  }
+  if (!tr.started) {
+    const m = name.match(/_(\d{4})(\d{2})(\d{2})/);
+    if (m) tr.started = new Date(+m[1], m[2] - 1, +m[3]);
+  }
+  const who = tr.student.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const start = new RegExp(`^(?:\\[([^\\]]+)\\] )?(Dana Morgan|${who}): ?(.*)$`);
+  let cur = null, prev = null;
+  for (const line of lines.slice(i)) {
+    const m = line.match(start);
+    if (m) {
+      if (cur) tr.messages.push(cur);
+      const t = m[1] ? parseTime(m[1], tr.started, prev) : null;
+      if (t) prev = t;
+      cur = {idx: tr.messages.length, who: m[2] === "Dana Morgan" ? "dana" : "student", text: m[3], time: t, att: [], flags: [], kind: ""};
+    } else if (cur) cur.text += "\n" + line;
+  }
+  if (cur) tr.messages.push(cur);
+  for (const m of tr.messages) {
+    m.att = [...m.text.matchAll(/^\[Attachment: (.+?)\]\s*$/gm)].map(x => x[1]);
+    m.text = m.text.replace(/^\[Attachment: .+?\]\s*$/gm, "").trim();
+  }
+  classify(tr);
+  return tr;
+}
+
+function classify(tr) {
+  let wrap = false;
+  for (const m of tr.messages) {
+    const t = m.text;
+    if (m.who === "dana") {
+      if (/^\**end-of-day check-in/i.test(t)) m.kind = "checkin";
+      else if ((/\bbefore you (?:start|begin|run anything|run it|run your)\b/i.test(t)
+                || /\b(?:next one|here'?s your first one|first one is)\b/i.test(t)) && t.length > 200) m.kind = "request";
+      if (m.kind !== "checkin" && !/\bbefore you go\b[\s\S]*\breflection\b/i.test(t)) {
+        if (has(DANA_CORRECTS, t)) m.flags.push("Dana corrected or questioned something");
+        if (has(DANA_REPEATS, t)) m.flags.push("Dana had to repeat a question");
+      }
+    } else {
+      if (t.startsWith("My prediction:")) m.kind = "prediction";
+      else if (t.startsWith("(Continuing from my earlier session")) m.kind = "resume";
+      else if (/^I need to stop for today/.test(t)) { m.kind = "finish"; wrap = true; }
+      else if (wrap) { m.kind = "reflection"; wrap = false; }
+      else if (/(^|\n)Query:/.test(t)) m.kind = "submission";
+      if (!["finish", "reflection", "prediction"].includes(m.kind) && has(STUDENT_STUCK, t)) m.flags.push("Student asked for help or sounded stuck");
+      if (t.includes("Result: error")) m.flags.push("Query returned an error");
+    }
+  }
+}
+
+// ------------------------------------------------------------ text helpers
+function inline(text) {
+  return text.split(/(`[^`]+`)/).map(p => {
+    if (p.length > 1 && p.startsWith("`") && p.endsWith("`")) return `<code>${esc(p.slice(1, -1))}</code>`;
+    return esc(p).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^\w*])\*(?!\s)([^*]+?)\*(?![\w*])/g, "$1<em>$2</em>");
+  }).join("");
+}
+function tableHtml(rows) {
+  const cells = rows.map(r => r.split(" | ").map(c => c.trim()));
+  return `<div class="scroll"><table><thead><tr>${cells[0].map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>` +
+    cells.slice(1).map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join("")}</tr>`).join("") + "</tbody></table></div>";
+}
+function renderBody(text) {
+  const L = text.split("\n"), out = [];
+  const isList = s => /^\s*([-*•]|\d+[.)]) /.test(s);
+  let i = 0;
+  while (i < L.length) {
+    const line = L[i];
+    if (line.trim().startsWith("```")) {
+      let j = i + 1; const code = [];
+      while (j < L.length && !L[j].trim().startsWith("```")) code.push(L[j++]);
+      out.push(`<pre>${esc(code.join("\n"))}</pre>`); i = j + 1; continue;
+    }
+    if (line.trim() === "Query:") {
+      let j = i + 1; const code = [];
+      while (j < L.length && !L[j].startsWith("Result:")) code.push(L[j++]);
+      out.push(`<div class="label">Query</div><pre>${esc(code.join("\n").trim())}</pre>`); i = j; continue;
+    }
+    if (line.startsWith("Result:")) {
+      out.push(`<div class="result${/error/.test(line.slice(0, 16)) ? " error" : ""}">${esc(line)}</div>`);
+      let j = i + 1; const rows = [];
+      while (j < L.length && L[j].includes(" | ")) rows.push(L[j++]);
+      if (rows.length) out.push(tableHtml(rows));
+      i = j; continue;
+    }
+    if (/^\s*[-*•] /.test(line)) {
+      const items = [];
+      while (i < L.length && /^\s*[-*•] /.test(L[i])) items.push(L[i++].replace(/^\s*[-*•] /, ""));
+      out.push(`<ul>${items.map(x => `<li>${inline(x)}</li>`).join("")}</ul>`); continue;
+    }
+    if (/^\s*\d+[.)] /.test(line)) {
+      const items = [];
+      while (i < L.length && /^\s*\d+[.)] /.test(L[i])) items.push(L[i++].replace(/^\s*\d+[.)] /, ""));
+      out.push(`<ol>${items.map(x => `<li>${inline(x)}</li>`).join("")}</ol>`); continue;
+    }
+    if (!line.trim()) { i++; continue; }
+    const para = [line]; i++;
+    while (i < L.length && L[i].trim() && !isList(L[i]) && !L[i].trim().startsWith("```") && L[i].trim() !== "Query:" && !L[i].startsWith("Result:")) para.push(L[i++]);
+    out.push(`<p>${para.map(inline).join("<br>")}</p>`);
+  }
+  return out.join("\n");
+}
+const clean = t => t.replace(/\*\*|`/g, "").replace(/\s+/g, " ").trim();
+const clip = (s, n) => s.length <= n ? s : s.slice(0, n - 1).trimEnd() + "…";
+const snippet = (t, n = 170) => clip(clean(t), n);
+const sentences = t => (t.match(/[^.!?]+(?:[.!?]+|$)\s*/g) || [t]).map(s => s.trim()).filter(Boolean);
+const firstSentence = (t, n = 140) => clip(sentences(clean(t))[0] || "", n);
+const GREETING = /^(?:hi|hello|hey|thanks|thank you|welcome|nice|great|good|perfect|yes|no problem)\b/i;
+function requestTitle(text) {
+  const t = clean(text);
+  const lab = t.match(/\bRequest:\s*(.+)/);
+  if (lab) return firstSentence(lab[1]);
+  const S = sentences(t);
+  for (let k = 0; k < S.length; k++) {
+    const m = S[k].match(/\b(?:next one|next request|first one|here'?s your first)\b/i);
+    if (m) {
+      const after = S[k].slice(m.index + m[0].length).replace(/^[ .:!,]+|[ .:!,]+$/g, "");
+      return after.length < 25 && k + 1 < S.length ? firstSentence(S[k + 1]) : firstSentence(S[k]);
+    }
+  }
+  for (const s of S) if (!GREETING.test(s) && s.length > 25) return firstSentence(s);
+  return firstSentence(t);
+}
+function matchedSentence(text, patterns, n = 190) {
+  const t = clean(text.replace(/(^|\n)\s*(?:[-*•]|\d+[.)])\s+/g, "$1"));
+  const hits = patterns.map(p => t.search(p)).filter(x => x >= 0);
+  if (!hits.length) return snippet(text, n);
+  const pos = Math.min(...hits);
+  let start = Math.max(t.lastIndexOf(". ", pos), t.lastIndexOf("? ", pos), t.lastIndexOf("! ", pos), t.lastIndexOf(": ", pos));
+  start = start >= 0 ? start + 2 : 0;
+  const endOf = from => { const m = t.slice(from).match(/[.?!](\s|$)/); return m ? from + m.index + m[0].length : t.length; };
+  let end = endOf(pos);
+  if (end - start < 45) end = endOf(end);
+  return clip(t.slice(start, end).trim(), n);
+}
+function pauseLabel(m) {
+  const text = m.text === "(See attached.)" ? "" : m.text;
+  const who = m.who === "dana" ? "Dana" : "student";
+  return m.att.length && !text ? `${who} sent ${m.att.join(", ")}` : `${who}: ${snippet(text, 110)}`;
+}
+
+// ------------------------------------------------------------ page
+function build(tr) {
+  const msgs = tr.messages, times = msgs.filter(m => m.time).map(m => m.time);
+  const s = times.length ? new Date(Math.min(...times)) : null, e = times.length ? new Date(Math.max(...times)) : null;
+  const studentMsgs = msgs.filter(m => m.who === "student");
+  const requests = msgs.filter(m => m.kind === "request"), preds = msgs.filter(m => m.kind === "prediction");
+  const stuck = msgs.filter(m => m.flags.some(f => f.startsWith("Student") || f.includes("error")));
+  const corrected = msgs.filter(m => m.flags.includes("Dana corrected or questioned something"));
+  const repeats = msgs.filter(m => m.flags.includes("Dana had to repeat a question"));
+  const reflection = msgs.find(m => m.kind === "reflection"), checkin = msgs.find(m => m.kind === "checkin");
+  const gaps = []; let prev = null;
+  for (const m of msgs) { if (m.time && prev && m.time - prev.time > LONG_PAUSE_MIN * 60000) gaps.push([prev, m]); if (m.time) prev = m; }
+  const link = (m, label) => `<a href="#" data-go="${m.idx}"><span class="time">${tstr(m.time) || "#" + (m.idx + 1)}</span> ${esc(label)}</a>`;
+  const list = (items, fn, empty) => items.length ? `<ul>${items.map(x => `<li>${fn(x)}</li>`).join("")}</ul>` : `<p class="empty">${empty}</p>`;
+  let grow = "";
+  if (checkin) {
+    const g = checkin.text.match(/\*\*Where to grow\*\*([\s\S]+?)(\*\*Focus for next time\*\*|$)/);
+    const f = checkin.text.match(/\*\*Focus for next time\*\*\s*([\s\S]+?)(\n\n|$)/);
+    if (g) grow = renderBody(g[1].trim());
+    if (f) grow += `<p><strong>Focus for next time:</strong> ${inline(f[1].trim())}</p>`;
+  }
+  const date = s || tr.started;
+  const stats = [[duration(s, e), "session length"], [s ? `${tstr(s)}–${tstr(e)}` : "–", "first to last message"],
+    [studentMsgs.length, "student messages"], [requests.length, "requests"],
+    [tr.app === "SQL" ? studentMsgs.filter(m => m.kind === "submission").length : studentMsgs.reduce((n, m) => n + m.att.length, 0),
+     tr.app === "SQL" ? "queries sent" : "files sent by student"], [stuck.length + corrected.length, "flagged moments"]];
+  const convo = []; prev = null;
+  for (const m of msgs) {
+    if (m.time && prev && m.time - prev.time > LONG_PAUSE_MIN * 60000) convo.push(`<div class="gap">${duration(prev.time, m.time)} pause</div>`);
+    if (m.time) prev = m;
+    const cls = ["msg", m.who, m.kind, m.flags.length ? "flagged" : ""].filter(Boolean).join(" ");
+    let tags = (m.kind === "request" ? '<span class="tag req">New request</span>' : "") + (m.kind === "prediction" ? '<span class="tag pred">Prediction</span>' : "");
+    tags += m.flags.map(f => `<span class="tag">${esc(f)}</span>`).join("");
+    convo.push(`<div class="${cls}" id="m${m.idx}"><div class="bubble"><div class="who">${esc(m.who === "dana" ? "Dana Morgan" : tr.student)} <span class="time">${tstr(m.time)}</span></div>` +
+      (tags ? `<div>${tags}</div>` : "") + (m.text ? renderBody(m.text) : '<p class="empty">(attachment only)</p>') +
+      (m.att.length ? `<div>${m.att.map(a => `<span class="chip">Attachment: ${esc(a)}</span>`).join("")}</div>` : "") + "</div></div>");
+  }
+  const sub = [tr.number && `Student number ending ${tr.number}`, tr.module,
+    date && `${["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][date.getDay()]} ${date.getDate()} ${MONTHS[date.getMonth()]} ${date.getFullYear()}`].filter(Boolean).join(" · ");
+  return `<h2 style="margin-top:8px">${esc(tr.student)} · ${tr.app} Analyst Inbox</h2>
+<div class="sub">${esc(sub)}<br><span class="time">${esc(tr.name)}</span></div>
+<div class="stats">${stats.map(([v, k]) => `<div class="stat"><b>${esc(v)}</b><span>${k}</span></div>`).join("")}</div>
+<h2>Tutor notes</h2><div class="notes">
+<h3>Requests Dana sent (${requests.length})</h3>${list(requests, m => link(m, requestTitle(m.text)), "No requests detected.")}
+<h3>Student predictions (${preds.length})</h3>${list(preds, m => link(m, m.text.replace("My prediction:", "").trim()), "No predictions recorded.")}
+<h3>Possible stumbling points (${stuck.length})</h3>${list(stuck, m => link(m, matchedSentence(m.text, [...STUDENT_STUCK, /Result: error/])), "None detected.")}
+<h3>Dana corrected or questioned something (${corrected.length})</h3>${list(corrected, m => link(m, matchedSentence(m.text, DANA_CORRECTS)), "None detected.")}
+<h3>Questions Dana had to repeat (${repeats.length})</h3>${list(repeats, m => link(m, matchedSentence(m.text, DANA_REPEATS)), "None. Dana's questions were answered the first time.")}
+<h3>Long pauses, over ${LONG_PAUSE_MIN} min (${gaps.length})</h3>${list(gaps, g => link(g[1], `${duration(g[0].time, g[1].time)} pause, then: ${pauseLabel(g[1])}`), "None.")}
+<h3>Student's reflection</h3>${reflection ? `<p>${inline(reflection.text)}</p>` : '<p class="empty">No reflection in this transcript.</p>'}
+<h3>Dana's check-in: where to grow</h3>${grow || '<p class="empty">No end-of-day check-in in this transcript.</p>'}
+<p class="empty" style="font-size:14px;margin-top:12px">Flags are found by keyword, so treat them as pointers, not verdicts. Tap an item to jump to it.</p></div>
+<h2>Conversation</h2>
+<div class="toolbar"><button class="on" data-mode="all">All messages</button><button data-mode="flagged">Flagged only</button><button data-mode="requests">Requests, predictions, check-in</button></div>
+<div id="convo">${convo.join("")}</div>`;
+}
+
+function indexHtml(list) {
+  const row = tr => {
+    const t = tr.messages.filter(m => m.time).map(m => m.time);
+    const s = t.length ? new Date(Math.min(...t)) : null, e = t.length ? new Date(Math.max(...t)) : null, d = s || tr.started;
+    return `<tr><td data-l="Student"><a href="#" data-open="${tr.i}">${esc(tr.student)}</a></td><td data-l="No.">${esc(tr.number)}</td><td data-l="App">${tr.app}</td>
+<td data-l="Module">${esc(tr.module)}</td><td data-l="Date">${d ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : ""}</td>
+<td data-l="Length">${duration(s, e)}</td><td data-l="Requests" class="num">${tr.messages.filter(m => m.kind === "request").length}</td>
+<td data-l="Flagged" class="num">${tr.messages.filter(m => m.flags.length).length}</td></tr>`;
+  };
+  return `<h2>${list.length} transcripts</h2><div class="scroll"><table class="index"><thead><tr><th>Student</th><th>No.</th><th>App</th><th>Module</th><th>Date</th><th>Length</th><th>Requests</th><th>Flagged</th></tr></thead><tbody>${list.map(row).join("")}</tbody></table></div>`;
+}
+
+// ------------------------------------------------------------ wiring
+const out = document.getElementById("out"), filesEl = document.getElementById("files"), drop = document.getElementById("drop");
+let loaded = [];
+function show(i) {
+  filesEl.querySelectorAll("button").forEach(b => b.classList.toggle("on", +b.dataset.i === i));
+  out.innerHTML = i < 0 ? indexHtml(loaded) : build(loaded[i]);
+  out.scrollIntoView({behavior: "smooth", block: "start"});
+}
+async function load(fileList) {
+  const files = [...fileList].filter(f => /\.txt$/i.test(f.name) || f.type === "text/plain");
+  if (!files.length) { out.innerHTML = '<p class="empty">Choose one or more transcript .txt files.</p>'; return; }
+  loaded = [];
+  for (const f of files) {
+    try { const tr = parse(f.name, await f.text()); tr.i = loaded.length; loaded.push(tr); }
+    catch (err) { out.insertAdjacentHTML("beforeend", `<p class="empty">Couldn't read ${esc(f.name)}.</p>`); }
+  }
+  loaded.sort((a, b) => (a.started || 0) - (b.started || 0)).forEach((t, k) => t.i = k);
+  filesEl.innerHTML = (loaded.length > 1 ? '<button data-i="-1">All transcripts</button>' : "") +
+    loaded.map(t => `<button data-i="${t.i}">${esc(t.student)} · ${t.app}${t.started ? " · " + MONTHS[t.started.getMonth()] + " " + t.started.getDate() : ""}</button>`).join("");
+  show(loaded.length > 1 ? -1 : 0);
+}
+document.getElementById("pick").addEventListener("change", e => load(e.target.files));
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => load(e.dataTransfer.files));
+filesEl.addEventListener("click", e => { const b = e.target.closest("button"); if (b) show(+b.dataset.i); });
+out.addEventListener("click", e => {
+  const go = e.target.closest("[data-go]"), open = e.target.closest("[data-open]"), mode = e.target.closest("[data-mode]");
+  if (go) {
+    e.preventDefault();
+    const el = document.getElementById("m" + go.dataset.go);
+    out.querySelectorAll("#convo > *").forEach(x => x.classList.remove("hidden"));
+    out.querySelectorAll("[data-mode]").forEach(b => b.classList.toggle("on", b.dataset.mode === "all"));
+    el.scrollIntoView({behavior: "smooth", block: "start"});
+    el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+  } else if (open) { e.preventDefault(); show(+open.dataset.open); }
+  else if (mode) {
+    out.querySelectorAll("[data-mode]").forEach(b => b.classList.toggle("on", b === mode));
+    const m = mode.dataset.mode;
+    out.querySelectorAll("#convo > *").forEach(el => {
+      const keep = m === "all" || (m === "flagged" && el.classList.contains("flagged")) ||
+        (m === "requests" && ["request", "prediction", "checkin"].some(c => el.classList.contains(c)));
+      el.classList.toggle("hidden", !keep);
+    });
+  }
+});
+}
+</script>
+</body>
+</html>
