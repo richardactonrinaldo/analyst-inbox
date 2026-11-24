@@ -686,11 +686,20 @@ if "student" not in st.session_state and st.query_params.get("s"):
     if not (linked and restore_conversation(linked)):
         st.query_params.clear()
 
+PRIVACY_NOTICE = (
+    "**Dana is an AI**, not a person, and she can make mistakes. Your nickname, messages and files are sent to Anthropic "
+    "(United States) to run her. They aren't used to train AI, and Anthropic deletes them within 30 days. The app is "
+    "hosted by Streamlit (United States) and only keeps your conversation temporarily; your downloaded transcript "
+    "is your own copy. **Don't enter your real name, student number, health information or anything about real "
+    "patients.** If you'd rather not use an AI tool, talk to your instructor about an alternative activity."
+)
+
 # ---------------------------------------------------------------- sign-in gate
 if "student" not in st.session_state:
     st.title("Analyst Inbox")
     st.write("Dana Morgan, Manager of Decision Support at Lakeshore Regional Health, will send you "
              "analysis requests. Do the work in Excel and reply with your results.")
+    st.info(PRIVACY_NOTICE)
     with st.form("signin"):
         nick = st.text_input("Your nickname", max_chars=24, placeholder="e.g. QuietOtter37")
         st.caption("Pick a nickname only you would use (a word plus a couple of numbers works well). It doesn't "
@@ -763,6 +772,8 @@ with st.sidebar:
     st.caption(f"Signed in as {st.session_state.student}. If the page reloads or you come back later, "
                "enter this nickname to continue.")
 
+    with st.expander("About Dana and your data"):
+        st.markdown(PRIVACY_NOTICE)
     with st.expander("Lost Dana's file?"):
         st.download_button("Download the full dataset", to_xlsx(DF), "ED_Visits_2025.xlsx", XLSX_MIME,
                            width="stretch")
