@@ -71,6 +71,8 @@ th{background:var(--dana)}
 .chip{display:inline-block;font-size:13px;border:1px solid var(--line);border-radius:12px;padding:1px 9px;margin:4px 4px 0 0;color:var(--muted);background:var(--card)}
 .gap{text-align:center;color:var(--warn);font-size:14px;margin:14px 0}
 .hidden{display:none!important}
+.alert{background:light-dark(#fdecea,#3a1714);border:2px solid light-dark(#c0392b,#e0705f);border-radius:12px;padding:8px 16px;margin:0 0 14px;color:light-dark(#7a1f14,#f6c3bb)}
+.alert a{color:inherit}.alert ul{margin:6px 0;padding-left:20px}
 .index{width:100%;background:var(--card)}.index td,.index th{white-space:normal;padding:8px 10px}
 .index td.num{text-align:right}
 @media(max-width:600px){.bubble{max-width:94%}.notes{padding:2px 12px 10px}
@@ -101,6 +103,7 @@ const DANA_CORRECTS = [/\bnot quite\b/i,/\bclose\b[!,.]/i,/\bdoesn'?t match\b/i,
   /\bisn'?t correct\b/i,/\bnot correct\b/i,/\bwon'?t work\b/i,/\bwrong\b/i,/\bmistake\b/i,/\boff by\b/i,/\bhard-coded\b/i,
   /#DIV\/0/i,/#VALUE/i,/#N\/A/i,/#REF/i,/\bI don'?t see\b/i,/\bonly has\b/i,/\bdouble-?check\b/i,/\bsyntax\b/i,
   /\bshould (?:read|be)\b/i,/\bmissing\b/i,/\bslipped\b/i];
+const WELLBEING = [/depress/i,/\banxi/i,/overwhelm/i,/hopeless/i,/\bfeel(?:ing)? (?:so |really |very )?(?:down|low|awful|terrible|worthless|useless)\b/i,/mental health/i,/\bpanic/i,/can'?t cope/i,/\bgive up\b/i,/suicid/i,/self[- ]harm/i,/hurt myself/i,/kill myself/i,/\bworthless\b/i,/\bcrying\b/i,/stressed out/i,/confidence is (?:really |very |so )?low/i,/\bno confidence\b/i,/\bburn(?:ed|t)? out\b/i];
 const DANA_REPEATS = [/\bstill waiting\b/i,/\bhaven'?t answered\b/i,/\byou haven'?t\b/i,/\basking (?:it )?again\b/i,
   /\bstill need\b/i,/\bcoming back to\b/i,/\bstill open\b/i,/\bdidn'?t answer\b/i,/\bwhen you get a sec\b/i,
   /\bwhat about the (?:first|second)\b/i];
@@ -186,6 +189,7 @@ function classify(tr) {
       else if (/^I need to stop for today/.test(t)) { m.kind = "finish"; wrap = true; }
       else if (wrap) { m.kind = "reflection"; wrap = false; }
       else if (/(^|\n)Query:/.test(t)) m.kind = "submission";
+      if (has(WELLBEING, t)) m.flags.push("Possible wellbeing concern");
       if (!["finish", "reflection", "prediction"].includes(m.kind) && has(STUDENT_STUCK, t)) m.flags.push("Student asked for help or sounded stuck");
       if (t.includes("Result: error")) m.flags.push("Query returned an error");
     }
@@ -289,6 +293,7 @@ function build(tr) {
   const s = times.length ? new Date(Math.min(...times)) : null, e = times.length ? new Date(Math.max(...times)) : null;
   const studentMsgs = msgs.filter(m => m.who === "student");
   const requests = msgs.filter(m => m.kind === "request"), preds = msgs.filter(m => m.kind === "prediction");
+  const wellbeing = msgs.filter(m => m.flags.includes("Possible wellbeing concern"));
   const stuck = msgs.filter(m => m.flags.some(f => f.startsWith("Student") || f.includes("error")));
   const corrected = msgs.filter(m => m.flags.includes("Dana corrected or questioned something"));
   const repeats = msgs.filter(m => m.flags.includes("Dana had to repeat a question"));
@@ -308,7 +313,7 @@ function build(tr) {
   const stats = [[duration(s, e), "session length"], [s ? `${tstr(s)}–${tstr(e)}` : "–", "first to last message"],
     [studentMsgs.length, "student messages"], [requests.length, "requests"],
     [tr.app === "SQL" ? studentMsgs.filter(m => m.kind === "submission").length : studentMsgs.reduce((n, m) => n + m.att.length, 0),
-     tr.app === "SQL" ? "queries sent" : "files sent by student"], [stuck.length + corrected.length, "flagged moments"]];
+     tr.app === "SQL" ? "queries sent" : "files sent by student"], [stuck.length + corrected.length, "flagged moments"], [wellbeing.length, "wellbeing flags"]];
   const convo = []; prev = null;
   for (const m of msgs) {
     if (m.time && prev && m.time - prev.time > LONG_PAUSE_MIN * 60000) convo.push(`<div class="gap">${duration(prev.time, m.time)} pause</div>`);
@@ -325,7 +330,7 @@ function build(tr) {
   return `<h2 style="margin-top:8px">${esc(tr.student)} · ${tr.app} Analyst Inbox</h2>
 <div class="sub">${esc(sub)}<br><span class="time">${esc(tr.name)}</span></div>
 <div class="stats">${stats.map(([v, k]) => `<div class="stat"><b>${esc(v)}</b><span>${k}</span></div>`).join("")}</div>
-<h2>Tutor notes</h2><div class="notes">
+<h2>Tutor notes</h2>${wellbeing.length ? `<div class="alert"><strong>Possible wellbeing concern (${wellbeing.length})</strong><p>The student said something that may signal distress. Consider checking in with them directly.</p>${list(wellbeing, m => link(m, matchedSentence(m.text, WELLBEING)), "")}</div>` : ""}<div class="notes">
 <h3>Requests Dana sent (${requests.length})</h3>${list(requests, m => link(m, requestTitle(m.text)), "No requests detected.")}
 <h3>Student predictions (${preds.length})</h3>${list(preds, m => link(m, m.text.replace("My prediction:", "").trim()), "No predictions recorded.")}
 <h3>Possible stumbling points (${stuck.length})</h3>${list(stuck, m => link(m, matchedSentence(m.text, [...STUDENT_STUCK, /Result: error/])), "None detected.")}
@@ -347,9 +352,10 @@ function indexHtml(list) {
     return `<tr><td data-l="Student"><a href="#" data-open="${tr.i}">${esc(tr.student)}</a></td><td data-l="No.">${esc(tr.number)}</td><td data-l="App">${tr.app}</td>
 <td data-l="Module">${esc(tr.module)}</td><td data-l="Date">${d ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : ""}</td>
 <td data-l="Length">${duration(s, e)}</td><td data-l="Requests" class="num">${tr.messages.filter(m => m.kind === "request").length}</td>
-<td data-l="Flagged" class="num">${tr.messages.filter(m => m.flags.length).length}</td></tr>`;
+<td data-l="Flagged" class="num">${tr.messages.filter(m => m.flags.length).length}</td>
+<td data-l="Wellbeing">${tr.messages.some(m => m.flags.includes("Possible wellbeing concern")) ? '<b style="color:#c0392b">Yes</b>' : ""}</td></tr>`;
   };
-  return `<h2>${list.length} transcripts</h2><div class="scroll"><table class="index"><thead><tr><th>Student</th><th>No.</th><th>App</th><th>Module</th><th>Date</th><th>Length</th><th>Requests</th><th>Flagged</th></tr></thead><tbody>${list.map(row).join("")}</tbody></table></div>`;
+  return `<h2>${list.length} transcripts</h2><div class="scroll"><table class="index"><thead><tr><th>Student</th><th>No.</th><th>App</th><th>Module</th><th>Date</th><th>Length</th><th>Requests</th><th>Flagged</th><th>Wellbeing</th></tr></thead><tbody>${list.map(row).join("")}</tbody></table></div>`;
 }
 
 // ------------------------------------------------------------ wiring

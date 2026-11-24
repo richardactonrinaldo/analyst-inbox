@@ -39,6 +39,9 @@ DANA_CORRECTS = [
     r"\bhard-coded\b", r"#DIV/0", r"#VALUE", r"#N/A", r"#REF", r"\bI don'?t see\b", r"\bonly has\b",
     r"\bdouble-?check\b", r"\bsyntax\b", r"\bshould (?:read|be)\b", r"\bmissing\b", r"\bslipped\b",
 ]
+WELLBEING = [
+    r"depress", r"\banxi", r"overwhelm", r"hopeless", r"\bfeel(?:ing)? (?:so |really |very )?(?:down|low|awful|terrible|worthless|useless)\b", r"mental health", r"\bpanic", r"can'?t cope", r"\bgive up\b", r"suicid", r"self[- ]harm", r"hurt myself", r"kill myself", r"\bworthless\b", r"\bcrying\b", r"stressed out", r"confidence is (?:really |very |so )?low", r"\bno confidence\b", r"\bburn(?:ed|t)? out\b",
+]
 DANA_REPEATS = [
     r"\bstill waiting\b", r"\bhaven'?t answered\b", r"\byou haven'?t\b", r"\basking (?:it )?again\b",
     r"\bstill need\b", r"\bcoming back to\b", r"\bstill open\b", r"\bdidn'?t answer\b", r"\bbefore you go\b.*\?",
@@ -182,6 +185,8 @@ def classify(tr: Transcript):
                 wrap = False
             elif t.startswith("Query:") or "\nQuery:" in t:
                 msg.kind = "submission"
+            if has(WELLBEING, t):
+                msg.flags.append("Possible wellbeing concern")
             if msg.kind not in ("finish", "reflection", "prediction") and has(STUDENT_STUCK, t):
                 msg.flags.append("Student asked for help or sounded stuck")
             if "Result: error" in t:
@@ -405,6 +410,8 @@ th { background: #eef3f5; }
 .gap { text-align: center; color: var(--warn); font-size: 13px; margin: 14px 0; }
 .flagnote { font-size: 12px; color: var(--warn); margin-top: 6px; }
 .hidden { display: none !important; }
+.alert { background: #fdecea; border: 2px solid #c0392b; border-radius: 8px; padding: 8px 14px; margin: 12px 0; color: #7a1f14; }
+.alert a { color: #7a1f14; }
 .empty { color: var(--muted); }
 @media print { .toolbar { display: none; } body { background: #fff; } .msg { break-inside: avoid; } }
 """
@@ -442,6 +449,7 @@ def build_page(tr: Transcript) -> str:
     preds = [m for m in msgs if m.kind == "prediction"]
     files_in = sum(len(m.attachments) for m in student_msgs)
     queries = sum(1 for m in student_msgs if m.kind == "submission")
+    wellbeing = [m for m in msgs if "Possible wellbeing concern" in m.flags]
     stuck = [m for m in msgs if any("Student" in f or "error" in f for f in m.flags)]
     corrected = [m for m in msgs if "Dana corrected or questioned something" in m.flags]
     repeats = [m for m in msgs if "Dana had to repeat a question" in m.flags]
@@ -473,7 +481,10 @@ def build_page(tr: Transcript) -> str:
         if f:
             grow += f"<p><strong>Focus for next time:</strong> {inline(f.group(1).strip())}</p>"
 
-    notes = f"""
+    alert = (f'''<div class="alert"><strong>Possible wellbeing concern ({len(wellbeing)})</strong>
+<p>The student said something that may signal distress. Consider checking in with them directly.</p>
+{listing(wellbeing, lambda m: link(m, matched_sentence(m.text, WELLBEING)), "")}</div>''' if wellbeing else "")
+    notes = f"""{alert}
 <h3>Requests Dana sent ({len(requests)})</h3>
 {listing(requests, lambda m: link(m, request_title(m.text)), "No requests detected.")}
 <h3>Student predictions ({len(preds)})</h3>
@@ -528,6 +539,7 @@ def build_page(tr: Transcript) -> str:
         (str(len(requests)), "requests"),
         (str(queries if tr.app == "SQL" else files_in), "queries sent" if tr.app == "SQL" else "files sent by student"),
         (str(len(stuck) + len(corrected)), "flagged moments"),
+        (str(len(wellbeing)), "wellbeing flags"),
     ]
     stat_html = "".join(f'<div class="stat"><b>{html.escape(v)}</b><span>{html.escape(k)}</span></div>' for v, k in stats)
 
@@ -564,13 +576,14 @@ def build_index(results: list[tuple[Transcript, Path]]) -> str:
             f"<tr><td><a href='{html.escape(out.name)}'>{html.escape(tr.student)}</a></td><td>{html.escape(tr.number)}</td>"
             f"<td>{html.escape(tr.app)}</td><td>{html.escape(tr.module)}</td>"
             f"<td>{(start or tr.started).strftime('%Y-%m-%d') if (start or tr.started) else ''}</td>"
-            f"<td>{duration(start, end)}</td><td>{sum(1 for m in msgs if m.kind == 'request')}</td><td>{flagged}</td></tr>")
+            f"<td>{duration(start, end)}</td><td>{sum(1 for m in msgs if m.kind == 'request')}</td><td>{flagged}</td>"
+            f"<td>{'<b style=\"color:#c0392b\">Yes</b>' if any('Possible wellbeing concern' in m.flags for m in msgs) else ''}</td></tr>")
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Transcripts</title>
 <style>{CSS} table {{ width: 100%; font-size: 14px; }} td, th {{ padding: 6px 10px; }}</style></head>
 <body><div class="wrap"><h1>Analyst Inbox transcripts</h1>
 <div class="sub">{len(results)} transcript(s). Click a name to open its page.</div>
 <table><thead><tr><th>Student</th><th>No.</th><th>App</th><th>Module</th><th>Date</th><th>Length</th>
-<th>Requests</th><th>Flagged messages</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></body></html>"""
+<th>Requests</th><th>Flagged messages</th><th>Wellbeing</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></body></html>"""
 
 
 # ---------------------------------------------------------------- main
