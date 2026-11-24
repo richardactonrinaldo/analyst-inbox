@@ -110,9 +110,9 @@ def parse(path: Path) -> Transcript:
     i = 0
     while i < len(lines) and lines[i].strip():
         line = lines[i]
-        m = re.match(r"Student:\s*(.+?)\s*\(student number ending\s*(\d+)\)", line)
+        m = re.match(r"Student:\s*(.+?)\s*(?:\(student number ending\s*(\d+)\))?\s*$", line)
         if m:
-            tr.student, tr.number = m.group(1).strip(), m.group(2)
+            tr.student, tr.number = m.group(1).strip(), m.group(2) or ""
         elif line.startswith("Module:"):
             tr.module = line.split(":", 1)[1].strip()
         elif line.startswith("Session started:"):

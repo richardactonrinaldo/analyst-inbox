@@ -137,8 +137,8 @@ function parse(name, raw) {
   let i = 0;
   for (; i < lines.length && lines[i].trim(); i++) {
     const line = lines[i];
-    let m = line.match(/Student:\s*(.+?)\s*\(student number ending\s*(\d+)\)/);
-    if (m) { tr.student = m[1].trim(); tr.number = m[2]; continue; }
+    let m = line.match(/^Student:\s*(.+?)\s*(?:\(student number ending\s*(\d+)\))?\s*$/);
+    if (m) { tr.student = m[1].trim(); tr.number = m[2] || ""; continue; }
     if (line.startsWith("Module:")) tr.module = line.slice(7).trim();
     m = line.match(/^Session started:.*?(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/);
     if (m) tr.started = new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]);
